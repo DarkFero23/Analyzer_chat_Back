@@ -2,11 +2,12 @@ import os
 import io
 import psycopg2
 import pandas as pd
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, session
 import matplotlib
 matplotlib.use('Agg')
 import nltk
 from dotenv import load_dotenv
+import secrets
 
 from nltk.sentiment import SentimentIntensityAnalyzer
 
@@ -23,6 +24,7 @@ import string
 from collections import Counter
 from textblob import TextBlob
 from nrclex import NRCLex
+from uuid import uuid4
 
 nltk.download('punkt')
 nltk.download('punkt_tab')
@@ -39,11 +41,17 @@ sia = SentimentIntensityAnalyzer()
 # 🔹 Inicializar Flask
 app = Flask(__name__)
 CORS(app)
+app.secret_key = os.environ.get("SECRET_KEY")
 
 #load_dotenv()
-
+@app.before_request
+def asignar_sesion():
+    if "session_id" not in session:
+        session["session_id"] = str(uuid4())  # Genera un ID único por usuario
 # 🔹 Intentar obtener la URL de la base de datos desde las variables de entorno
 #SERVIDOR
+archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
+
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # 🔹 Si no está definida, usar la configuración local
@@ -110,8 +118,7 @@ def upload_file():
         
         print(f"✅ Mensajes limpios guardados en la base de datos (usando COPY).")
         
-        global ultimos_mensajes  
-        ultimos_mensajes = df.to_dict(orient="records")  
+        session["mensajes"] = df.to_dict(orient="records") 
 
         return jsonify({"message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito"}), 200
 
@@ -135,13 +142,11 @@ def get_last_cleaned():
 
 @app.route('/get_statistics', methods=['GET'])
 def get_statistics():
-    global ultimos_mensajes
-
-    if not ultimos_mensajes:
+    if "mensajes" not in session or not session["mensajes"]:
         return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
 
     # Convertir a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    df = pd.DataFrame(session["mensajes"])
 
     # 📊 **Cálculo de estadísticas básicas**
     total_message = df.shape[0]  # Total de mensajes
@@ -158,7 +163,6 @@ def get_statistics():
     df['URL_count'] = df['Message'].apply(lambda x: len(re.findall(url_pattern, x)))
     
     total_links = df['URL_count'].sum()  # Contar todos los links en los mensajes
-    
 
     # 📊 **Devolver las estadísticas**
     stats = {
@@ -170,10 +174,11 @@ def get_statistics():
         "total_caracteres": total_characters,
         "promedio_caracteres": f"{avg_characters:.2f}",
         "total_links": total_links,
-
     }
 
+    # Convertir tipos NumPy a tipos nativos de Python
     stats = {k: int(v) if isinstance(v, (np.int64, np.int32)) else v for k, v in stats.items()}
+
     return jsonify(stats), 200
 
 @app.route('/plot.png')
