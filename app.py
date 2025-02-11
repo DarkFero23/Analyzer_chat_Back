@@ -7,8 +7,8 @@ import matplotlib
 matplotlib.use('Agg')
 import nltk
 from dotenv import load_dotenv
-import secrets
-
+import jwt
+import datetime
 from nltk.sentiment import SentimentIntensityAnalyzer
 
 import matplotlib.pyplot as plt
@@ -41,18 +41,13 @@ sia = SentimentIntensityAnalyzer()
 # 🔹 Inicializar Flask
 app = Flask(__name__)
 CORS(app)
-app.secret_key = os.environ.get("SECRET_KEY")
 
 #load_dotenv()
-@app.before_request
-def asignar_sesion():
-    if "session_id" not in session:
-        session["session_id"] = str(uuid4())  # Genera un ID único por usuario
-# 🔹 Intentar obtener la URL de la base de datos desde las variables de entorno
-#SERVIDOR
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
-
+#Intentar obtener la URL de la base de datos desde las variables de entorno
+#SERVIDOR
 DATABASE_URL = os.environ.get("DATABASE_URL")
+SECRET_KEY = os.environ.get("SECRET_KEY")
 
 # 🔹 Si no está definida, usar la configuración local
 #LOCAL
@@ -97,30 +92,39 @@ def upload_file():
         cursor = conn.cursor()
         cursor.execute("CALL insertar_archivo(%s, %s);", (nombre_archivo, contenido))
         conn.commit()
-        print(f"✅ Archivo '{nombre_archivo}' guardado en la base de datos.")
+        print(f"? Archivo '{nombre_archivo}' guardado en la base de datos.")
 
-        # 🔹 Usar la función corregida con todas las transformaciones
+        # ?? Generar un `user_token` efímero si no existe en la sesión
+        if "user_token" not in session:
+            session["user_token"] = str(uuid.uuid4())
+
+        user_token = session["user_token"]
+
+        # ?? Procesar el archivo con la función DataFrame_Data
         df = DataFrame_Data(contenido, nombre_archivo)
 
         if df.empty:
             return jsonify({"error": "No se pudieron procesar los mensajes"}), 500
 
-        # 🔹 Convertir DataFrame a CSV en memoria para usar COPY
+        # ?? Convertir DataFrame a CSV en memoria para usar COPY en la BD
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, header=False, sep="|")
         csv_buffer.seek(0)
 
-        # 🔹 Usar COPY en lugar de múltiples INSERT
         cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
             'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje'
         ])
         conn.commit()
-        
-        print(f"✅ Mensajes limpios guardados en la base de datos (usando COPY).")
-        
-        session["mensajes"] = df.to_dict(orient="records") 
 
-        return jsonify({"message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito"}), 200
+        print(f"? Mensajes limpios guardados en la base de datos (usando COPY).")
+
+        # ?? Guardar los datos en sesión para que cada usuario solo acceda a los suyos
+        session["mensajes"] = df.to_dict(orient="records")
+
+        return jsonify({
+            "message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito",
+            "user_token": user_token  # Se devuelve para referencia en el frontend
+        }), 200
 
     except Exception as e:
         return jsonify({"error": f"Error al procesar el archivo: {str(e)}"}), 500
@@ -129,15 +133,14 @@ def upload_file():
         cursor.close()
         conn.close()
 
+
 # 🔹 Endpoint para recuperar los datos limpios más recientes sin consultar la BD
 @app.route('/get_last_cleaned', methods=['GET'])
 def get_last_cleaned():
-    global ultimos_mensajes
-
-    if not ultimos_mensajes:  # Verifica si la lista está vacía
+    if "mensajes" not in session or not session["mensajes"]:
         return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
 
-    return jsonify({"mensajes_limpios": ultimos_mensajes}), 200
+    return jsonify({"mensajes_limpios": session["mensajes"]}), 200
 
 
 @app.route('/get_statistics', methods=['GET'])
@@ -145,26 +148,21 @@ def get_statistics():
     if "mensajes" not in session or not session["mensajes"]:
         return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
 
-    # Convertir a DataFrame
     df = pd.DataFrame(session["mensajes"])
 
-    # 📊 **Cálculo de estadísticas básicas**
-    total_message = df.shape[0]  # Total de mensajes
-    media_message = df[df['Message'] == '<Multimedia omitido>'].shape[0]  # Mensajes multimedia
-    del_message = df[df['Message'] == 'Eliminaste este mensaje.'].shape[0]  # Mensajes eliminados
+    total_message = df.shape[0]
+    media_message = df[df['mensaje'] == '<Multimedia omitido>'].shape[0]
+    del_message = df[df['mensaje'] == 'Eliminaste este mensaje.'].shape[0]
 
-    # 📈 **Cálculo de porcentajes**
     media_percentage = (media_message / total_message) * 100 if total_message > 0 else 0
     del_percentage = (del_message / total_message) * 100 if total_message > 0 else 0
-    total_characters = df['Message'].apply(len).sum()
-    avg_characters = df['Message'].apply(len).mean() if total_message > 0 else 0
+    total_characters = df['mensaje'].apply(len).sum()
+    avg_characters = df['mensaje'].apply(len).mean() if total_message > 0 else 0
 
-    url_pattern = r'https?://\S+|www\.\S+'  # Expresión regular para detectar URLs
-    df['URL_count'] = df['Message'].apply(lambda x: len(re.findall(url_pattern, x)))
-    
-    total_links = df['URL_count'].sum()  # Contar todos los links en los mensajes
+    url_pattern = r'https?://\S+|www\.\S+'
+    df['URL_count'] = df['mensaje'].apply(lambda x: len(re.findall(url_pattern, x)))
+    total_links = df['URL_count'].sum()
 
-    # 📊 **Devolver las estadísticas**
     stats = {
         "total_mensajes": total_message,
         "mensajes_multimedia": media_message,
@@ -175,9 +173,6 @@ def get_statistics():
         "promedio_caracteres": f"{avg_characters:.2f}",
         "total_links": total_links,
     }
-
-    # Convertir tipos NumPy a tipos nativos de Python
-    stats = {k: int(v) if isinstance(v, (np.int64, np.int32)) else v for k, v in stats.items()}
 
     return jsonify(stats), 200
 
