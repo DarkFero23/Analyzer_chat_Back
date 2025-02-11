@@ -3,6 +3,7 @@ import io
 import psycopg2
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, session
+
 import matplotlib
 matplotlib.use('Agg')
 import nltk
@@ -10,6 +11,8 @@ from dotenv import load_dotenv
 import jwt
 import datetime
 from nltk.sentiment import SentimentIntensityAnalyzer
+import secrets
+from flask_session import Session
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -24,7 +27,7 @@ import string
 from collections import Counter
 from textblob import TextBlob
 from nrclex import NRCLex
-from uuid import uuid4
+import uuid
 
 nltk.download('punkt')
 nltk.download('punkt_tab')
@@ -37,17 +40,18 @@ except LookupError:
 
 # Inicializar el analizador de sentimientos
 sia = SentimentIntensityAnalyzer()
+#load_dotenv()
 
 # 🔹 Inicializar Flask
 app = Flask(__name__)
+app.secret_key = secrets.token_hex(32)  # Clave segura y aleatoriadf['user_token'] = user_token  # Agregar user_token
+app.secret_key = os.getenv("SECRET_KEY", "clave_por_defecto")  # Usa variable de entorno
 CORS(app)
 
-#load_dotenv()
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
 #Intentar obtener la URL de la base de datos desde las variables de entorno
 #SERVIDOR
 DATABASE_URL = os.environ.get("DATABASE_URL")
-SECRET_KEY = os.environ.get("SECRET_KEY")
 
 # 🔹 Si no está definida, usar la configuración local
 #LOCAL
@@ -90,40 +94,44 @@ def upload_file():
 
     try:
         cursor = conn.cursor()
-        cursor.execute("CALL insertar_archivo(%s, %s);", (nombre_archivo, contenido))
-        conn.commit()
-        print(f"? Archivo '{nombre_archivo}' guardado en la base de datos.")
 
-        # ?? Generar un `user_token` efímero si no existe en la sesión
+        # ✅ Crear un `user_token` si no existe en sesión
         if "user_token" not in session:
             session["user_token"] = str(uuid.uuid4())
 
         user_token = session["user_token"]
 
-        # ?? Procesar el archivo con la función DataFrame_Data
-        df = DataFrame_Data(contenido, nombre_archivo)
+        # ✅ Guardar el archivo original en la BD
+        cursor.execute("INSERT INTO archivos_chat (nombre_archivo, contenido, user_token) VALUES (%s, %s, %s) RETURNING id;", 
+                       (nombre_archivo, contenido, user_token))
+        archivo_id = cursor.fetchone()[0]
+        conn.commit()
+
+        print(f"📂 Archivo '{nombre_archivo}' guardado en la base de datos.")
+
+        # ✅ Limpiar el archivo y guardarlo en `archivos_limpiados`
+        df = DataFrame_Data(contenido, nombre_archivo, user_token)
 
         if df.empty:
             return jsonify({"error": "No se pudieron procesar los mensajes"}), 500
 
-        # ?? Convertir DataFrame a CSV en memoria para usar COPY en la BD
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, header=False, sep="|")
         csv_buffer.seek(0)
 
         cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
-            'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje'
+            'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje', 'user_token'
         ])
         conn.commit()
 
-        print(f"? Mensajes limpios guardados en la base de datos (usando COPY).")
+        print(f"✅ Archivo limpio guardado en la base de datos.")
 
-        # ?? Guardar los datos en sesión para que cada usuario solo acceda a los suyos
-        session["mensajes"] = df.to_dict(orient="records")
+        # ✅ Guardar en sesión SOLO el `archivo_id` y el `user_token`
+        session["archivo_id"] = archivo_id
 
         return jsonify({
             "message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito",
-            "user_token": user_token  # Se devuelve para referencia en el frontend
+            "archivo_id": archivo_id
         }), 200
 
     except Exception as e:
@@ -132,15 +140,74 @@ def upload_file():
     finally:
         cursor.close()
         conn.close()
+@app.route('/obtener_mensajes', methods=['GET'])
+def obtener_mensajes():
+    """Devuelve los mensajes limpios del usuario autenticado"""
+    user_token = session.get("user_token")
 
+    if not user_token:
+        return jsonify({"error": "No hay sesión activa"}), 400
 
-# 🔹 Endpoint para recuperar los datos limpios más recientes sin consultar la BD
-@app.route('/get_last_cleaned', methods=['GET'])
-def get_last_cleaned():
-    if "mensajes" not in session or not session["mensajes"]:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    conn = conectar_bd()
+    if not conn:
+        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
 
-    return jsonify({"mensajes_limpios": session["mensajes"]}), 200
+    try:
+        cursor = conn.cursor()
+
+        # ✅ Buscar los mensajes del usuario en `archivos_limpiados`
+        cursor.execute("SELECT * FROM archivos_limpiados WHERE user_token = %s;", (user_token,))
+        mensajes = cursor.fetchall()
+
+        if not mensajes:
+            return jsonify({"error": "No hay mensajes procesados para este usuario"}), 404
+
+        # ✅ Convertir el resultado a un formato JSON
+        columnas = [desc[0] for desc in cursor.description]
+        mensajes_json = [dict(zip(columnas, fila)) for fila in mensajes]
+
+        return jsonify(mensajes_json), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Error al obtener los mensajes: {str(e)}"}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+@app.route('/get_cleaned_file', methods=['GET'])
+def get_cleaned_file():
+    """Obtiene el archivo limpio desde la BD."""
+    archivo_id = session.get("archivo_id")
+
+    if not archivo_id:
+        return jsonify({"error": "No hay archivo limpio disponible"}), 404
+
+    conn = conectar_bd()
+    if not conn:
+        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
+
+    try:
+        cursor = conn.cursor()
+
+        # Obtener los mensajes limpios desde la BD
+        cursor.execute("SELECT * FROM archivos_limpiados WHERE nombre_archivo = %s;", (archivo_id,))
+        datos = cursor.fetchall()
+
+        if not datos:
+            return jsonify({"error": "El archivo limpio no está disponible"}), 404
+
+        # Convertir los datos a JSON
+        columnas = ['nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje', 'user_token']
+        df = pd.DataFrame(datos, columns=columnas)
+
+        return df.to_json(orient='records')
+
+    except Exception as e:
+        return jsonify({"error": f"Error al obtener el archivo limpio: {str(e)}"}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
 @app.route('/get_statistics', methods=['GET'])

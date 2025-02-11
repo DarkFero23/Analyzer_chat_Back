@@ -65,7 +65,7 @@ def DataPoint(line):
 
 #----Funcion que convierte los datos en un DataFrame y los muestra 
 # 🔹 Función para procesar el contenido del chat
-def DataFrame_Data(content, nombre_archivo):
+def DataFrame_Data(content, nombre_archivo,user_token):
     parsedData = []
     messageBuffer = []
     Date, Time, Format, Author = None, None, None, None
@@ -78,7 +78,8 @@ def DataFrame_Data(content, nombre_archivo):
         if Date_Chat(line):
             if Date and Author and messageBuffer:
                 message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
-                parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text])
+                parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, user_token])
+
             messageBuffer.clear()
 
             Date, Time, Format, Author, Message = DataPoint(line)
@@ -91,8 +92,9 @@ def DataFrame_Data(content, nombre_archivo):
         message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
         parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text])
 
-    df = pd.DataFrame(parsedData, columns=['NombreArchivo', 'Date', 'Time', 'Format', 'Author', 'Message'])
-        
+    df = pd.DataFrame(parsedData, columns=['NombreArchivo', 'Date', 'Time', 'Format', 'Author', 'Message', 'user_token'])
+    
+
     if df.empty:
         print("⚠️ El DataFrame está vacío, puede haber un problema con el procesamiento.")
         return df
@@ -140,9 +142,10 @@ def DataFrame_Data(content, nombre_archivo):
     df['Year'] = df['Date'].dt.year
     df['Date'] = df['Date'].dt.strftime('%d/%m/%Y')
     df['Formato'] = df['Format']  # Guardar el AM/PM
-        
-    df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message']]
-
+    df['user_token'] = user_token  # Agregar user_token
+    
+    df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message','user_token']]
+    
 
 
     return df
