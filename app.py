@@ -3,16 +3,17 @@ import io
 import psycopg2
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, session
-
+import json
 import matplotlib
 matplotlib.use('Agg')
 import nltk
 from dotenv import load_dotenv
 import jwt
-import datetime
+from datetime import timedelta
 from nltk.sentiment import SentimentIntensityAnalyzer
 import secrets
 from flask_session import Session
+from sqlalchemy import create_engine, text
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -40,29 +41,22 @@ except LookupError:
 
 # Inicializar el analizador de sentimientos
 sia = SentimentIntensityAnalyzer()
-#load_dotenv()
+load_dotenv()
 
 # 🔹 Inicializar Flask
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)  # Clave segura y aleatoriadf['user_token'] = user_token  # Agregar user_token
-app.secret_key = os.getenv("SECRET_KEY", "clave_por_defecto")  # Usa variable de entorno
-CORS(app)
 
+CORS(app, supports_credentials=True)
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
-#Intentar obtener la URL de la base de datos desde las variables de entorno
-#SERVIDOR
+
+#####CONEXION A LA BD########
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
-# 🔹 Si no está definida, usar la configuración local
-#LOCAL
 #DATABASE_URL = "dbname=chat_analyzers user=postgres password=SylasMidM7 host=localhost port=5433"
-
 if not DATABASE_URL:
     print("⚠️ No se encontró DATABASE_URL, usando base de datos local.")
 else:
     
     print(f"🔹 Usando base de datos en Render: {DATABASE_URL}")
-
 # 🔹 Conectar a PostgreSQL (local o en Render)
 def conectar_bd():
     try:
@@ -74,19 +68,31 @@ def conectar_bd():
     except Exception as e:
         print(f"❌ Error al conectar con PostgreSQL: {e}")
         return None
-    
+####FIN DE CONEXION A LA BD########
+def obtener_datos(user_token):
+    conn = conectar_bd()  # Conectamos a la BD
+    if conn is None:
+        return None
+
+    try:
+        query = "SELECT mensaje FROM archivos_limpiados WHERE user_token = %s;"
+        df = pd.read_sql_query(query, conn, params=(user_token,))  # Cargar datos en DataFrame
+        conn.close()
+
+        return df if not df.empty else None  # Retornar DataFrame si hay datos
+    except Exception as e:
+        print(f"❌ Error al obtener datos: {e}")
+        return None
+
 # 🔹 Endpoint para subir archivos y limpiarlos automáticamente
 @app.route('/upload', methods=['POST'])
-def upload_file():
+def upload():
     if 'file' not in request.files:
         return jsonify({"error": "No se ha subido ningún archivo"}), 400
 
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "Nombre de archivo vacío"}), 400
-
-    nombre_archivo = file.filename
-    contenido = file.read().decode("utf-8")
 
     conn = conectar_bd()
     if not conn:
@@ -95,21 +101,22 @@ def upload_file():
     try:
         cursor = conn.cursor()
 
-        # ✅ Crear un `user_token` si no existe en sesión
-        if "user_token" not in session:
-            session["user_token"] = str(uuid.uuid4())
+        # 🔥 Buscar el último user_token y aumentarlo en 1
+        cursor.execute("SELECT COALESCE(MAX(user_token::INTEGER), 0) + 1 FROM archivos_chat;")
+        user_token = cursor.fetchone()[0]  # Nuevo user_token único
 
-        user_token = session["user_token"]
+        nombre_archivo = file.filename
+        contenido = file.read().decode("utf-8")
 
-        # ✅ Guardar el archivo original en la BD
+        # ✅ Guardar en `archivos_chat`
         cursor.execute("INSERT INTO archivos_chat (nombre_archivo, contenido, user_token) VALUES (%s, %s, %s) RETURNING id;", 
                        (nombre_archivo, contenido, user_token))
         archivo_id = cursor.fetchone()[0]
         conn.commit()
 
-        print(f"📂 Archivo '{nombre_archivo}' guardado en la base de datos.")
+        print(f"📂 Archivo '{nombre_archivo}' guardado con user_token {user_token}.")
 
-        # ✅ Limpiar el archivo y guardarlo en `archivos_limpiados`
+        # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
         df = DataFrame_Data(contenido, nombre_archivo, user_token)
 
         if df.empty:
@@ -124,14 +131,12 @@ def upload_file():
         ])
         conn.commit()
 
-        print(f"✅ Archivo limpio guardado en la base de datos.")
-
-        # ✅ Guardar en sesión SOLO el `archivo_id` y el `user_token`
-        session["archivo_id"] = archivo_id
+        print(f"✅ Archivo limpio guardado con user_token {user_token}.")
 
         return jsonify({
             "message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito",
-            "archivo_id": archivo_id
+            "archivo_id": archivo_id,
+            "user_token": user_token  # 🔥 Devolver el user_token al frontend
         }), 200
 
     except Exception as e:
@@ -140,95 +145,39 @@ def upload_file():
     finally:
         cursor.close()
         conn.close()
-@app.route('/obtener_mensajes', methods=['GET'])
-def obtener_mensajes():
-    """Devuelve los mensajes limpios del usuario autenticado"""
-    user_token = session.get("user_token")
-
-    if not user_token:
-        return jsonify({"error": "No hay sesión activa"}), 400
-
-    conn = conectar_bd()
-    if not conn:
-        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
-
-    try:
-        cursor = conn.cursor()
-
-        # ✅ Buscar los mensajes del usuario en `archivos_limpiados`
-        cursor.execute("SELECT * FROM archivos_limpiados WHERE user_token = %s;", (user_token,))
-        mensajes = cursor.fetchall()
-
-        if not mensajes:
-            return jsonify({"error": "No hay mensajes procesados para este usuario"}), 404
-
-        # ✅ Convertir el resultado a un formato JSON
-        columnas = [desc[0] for desc in cursor.description]
-        mensajes_json = [dict(zip(columnas, fila)) for fila in mensajes]
-
-        return jsonify(mensajes_json), 200
-
-    except Exception as e:
-        return jsonify({"error": f"Error al obtener los mensajes: {str(e)}"}), 500
-
-    finally:
-        cursor.close()
-        conn.close()
-@app.route('/get_cleaned_file', methods=['GET'])
-def get_cleaned_file():
-    """Obtiene el archivo limpio desde la BD."""
-    archivo_id = session.get("archivo_id")
-
-    if not archivo_id:
-        return jsonify({"error": "No hay archivo limpio disponible"}), 404
-
-    conn = conectar_bd()
-    if not conn:
-        return jsonify({"error": "No se pudo conectar a la base de datos"}), 500
-
-    try:
-        cursor = conn.cursor()
-
-        # Obtener los mensajes limpios desde la BD
-        cursor.execute("SELECT * FROM archivos_limpiados WHERE nombre_archivo = %s;", (archivo_id,))
-        datos = cursor.fetchall()
-
-        if not datos:
-            return jsonify({"error": "El archivo limpio no está disponible"}), 404
-
-        # Convertir los datos a JSON
-        columnas = ['nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje', 'user_token']
-        df = pd.DataFrame(datos, columns=columnas)
-
-        return df.to_json(orient='records')
-
-    except Exception as e:
-        return jsonify({"error": f"Error al obtener el archivo limpio: {str(e)}"}), 500
-
-    finally:
-        cursor.close()
-        conn.close()
-
 
 @app.route('/get_statistics', methods=['GET'])
 def get_statistics():
-    if "mensajes" not in session or not session["mensajes"]:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
 
-    df = pd.DataFrame(session["mensajes"])
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    total_message = df.shape[0]
-    media_message = df[df['mensaje'] == '<Multimedia omitido>'].shape[0]
-    del_message = df[df['mensaje'] == 'Eliminaste este mensaje.'].shape[0]
+    # 🔹 Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    media_percentage = (media_message / total_message) * 100 if total_message > 0 else 0
-    del_percentage = (del_message / total_message) * 100 if total_message > 0 else 0
-    total_characters = df['mensaje'].apply(len).sum()
-    avg_characters = df['mensaje'].apply(len).mean() if total_message > 0 else 0
+    # 🔥 Aquí llamamos a la BD para obtener datos filtrados por el user_token
+    df = obtener_datos(user_token)  # Función que trae los datos de la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+
+    # 🔥 Convertir valores para evitar errores de serialización
+    total_message = int(df.shape[0])
+    media_message = int(df[df['mensaje'] == '<Multimedia omitido>'].shape[0])
+    del_message = int(df[df['mensaje'] == 'Eliminaste este mensaje.'].shape[0])
+
+    media_percentage = float((media_message / total_message) * 100) if total_message > 0 else 0.0
+    del_percentage = float((del_message / total_message) * 100) if total_message > 0 else 0.0
+    total_characters = int(df['mensaje'].apply(len).sum())
+    avg_characters = float(df['mensaje'].apply(len).mean()) if total_message > 0 else 0.0
 
     url_pattern = r'https?://\S+|www\.\S+'
     df['URL_count'] = df['mensaje'].apply(lambda x: len(re.findall(url_pattern, x)))
-    total_links = df['URL_count'].sum()
+    total_links = int(df['URL_count'].sum())
 
     stats = {
         "total_mensajes": total_message,
@@ -242,6 +191,8 @@ def get_statistics():
     }
 
     return jsonify(stats), 200
+
+
 
 @app.route('/plot.png')
 def plot_png():

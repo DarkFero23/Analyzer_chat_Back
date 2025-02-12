@@ -18,3 +18,5 @@ python-dotenv==1.0.1
 uuid==1.30
 PyJWT==2.10.1
 DateTime==5.4
+greenlet==3.1.1 
+sqlalchemy==2.0.38
