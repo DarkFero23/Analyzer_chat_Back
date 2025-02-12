@@ -14,7 +14,8 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import secrets
 from flask_session import Session
 from sqlalchemy import create_engine, text
-
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from collections import Counter , defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sns
 from flask_cors import CORS
@@ -75,11 +76,14 @@ def obtener_datos(user_token):
         return None
 
     try:
-        query = "SELECT mensaje FROM archivos_limpiados WHERE user_token = %s;"
+        query = """
+        SELECT nombre_archivo, fecha, dia_semana, num_dia, mes, num_mes, anio, hora, autor, mensaje, formato, user_token
+        FROM archivos_limpiados WHERE user_token = %s;
+        """        
         df = pd.read_sql_query(query, conn, params=(user_token,))  # Cargar datos en DataFrame
         conn.close()
-
         return df if not df.empty else None  # Retornar DataFrame si hay datos
+    
     except Exception as e:
         print(f"❌ Error al obtener datos: {e}")
         return None
@@ -113,9 +117,6 @@ def upload():
                        (nombre_archivo, contenido, user_token))
         archivo_id = cursor.fetchone()[0]
         conn.commit()
-
-        print(f"📂 Archivo '{nombre_archivo}' guardado con user_token {user_token}.")
-
         # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
         df = DataFrame_Data(contenido, nombre_archivo, user_token)
 
@@ -192,25 +193,31 @@ def get_statistics():
 
     return jsonify(stats), 200
 
-
-
-@app.route('/plot.png')
+@app.route('/plot.png', methods=['GET'])
 def plot_png():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos disponibles para generar el gráfico. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir 'ultimos_mensajes' a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # 🔹 Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # 🔥 Llamar a la función que trae los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Función que trae los datos de la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Verificar si el DataFrame contiene la columna 'Day'
-    if 'Day' not in df.columns:
+    if 'dia_semana' not in df.columns:
         return jsonify({"error": "Los datos no contienen la columna 'Day'."}), 400
 
     # Contar los registros para cada día de la semana
-    active_day = df['Day'].value_counts()
-    print(active_day)
+    active_day = df['dia_semana'].value_counts()
 
     # Crear la figura y los ejes
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -226,7 +233,7 @@ def plot_png():
     # Configurar etiquetas y título
     ax.set_xticks(range(len(active_day.index)))
     ax.set_xticklabels(active_day.index, rotation=0, fontsize=10)
-    ax.set_yticks([])
+    ax.set_yticks([])  # No necesitamos los ticks en el eje Y
     ax.set_title('Actividad del chat por día', fontsize=13, fontweight='bold')
 
     # Guardar el gráfico en un objeto BytesIO
@@ -241,20 +248,30 @@ def plot_png():
 # --- Endpoint para generar el gráfico de emojis ---
 @app.route('/plot_emojis.png', methods=['GET'])
 def plot_emojis_png():
-    global ultimos_mensajes
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar el gráfico de emojis. Carga un archivo primero."}), 404
+    user_token = request.args.get("user_token")  # Recibe el user_token dinámicamente
 
-    # Convertir ultimos_mensajes a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
+
+    # Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos relacionados con el user_token
+    df = obtener_datos(user_token)
+    
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Lista para almacenar los emojis
     emojis = []
-    # Lista de emojis a excluir (por ejemplo, tonos de piel u otros que no desees)
+    # Lista de emojis a excluir
     no_emojis = ['🏻', '🏼', '🪄', '🪛', '🏿']
 
     # Recorrer cada mensaje y extraer los emojis
-    for message in df['Message']:
+    for message in df['mensaje']:
         for ch in str(message):
             if ch in emoji.EMOJI_DATA and ch not in no_emojis:
                 emojis.append(ch)
@@ -268,7 +285,7 @@ def plot_emojis_png():
     # Convertir la serie en un DataFrame
     emoji_df = pd.DataFrame(top_emojis).reset_index()
     emoji_df.columns = ['emoji', 'count']
-    print(emoji_df)
+
     # Crear el gráfico de pastel con Matplotlib
     fig, ax = plt.subplots(figsize=(10, 10))
     wedges, texts, autotexts = ax.pie(
@@ -296,16 +313,25 @@ def plot_emojis_png():
 
 @app.route('/plot_dates.png', methods=['GET'])
 def plot_dates_png():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir ultimos_mensajes a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Contar el número de mensajes por fecha y seleccionar los 10 días con mayor actividad
-    TopDate = df['Date'].value_counts().head(10)
+    TopDate = df['fecha'].value_counts().head(10)
     print("Datos por fecha:", TopDate)
 
     # Crear la figura y los ejes para el gráfico de barras
@@ -316,7 +342,6 @@ def plot_dates_png():
 
     # Agregar etiquetas encima de cada barra
     for idx, value in enumerate(TopDate):
-        # Se coloca la etiqueta centrada sobre la barra; se convierte el valor a entero para evitar problemas
         ax.text(idx - 0.15, value + 2, str(int(value)), color='black', fontsize=10)
 
     # Configurar las etiquetas del eje x y el título
@@ -335,32 +360,39 @@ def plot_dates_png():
 
 @app.route('/plot_mensajes_año.png', methods=['GET'])
 def plot_mensajes_año():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar el gráfico. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir ultimos_mensajes a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Verificar que la columna 'Year' existe en el DataFrame
-    if 'Year' not in df.columns:
-        return jsonify({"error": "Los datos no contienen la columna 'Year'."}), 400
+    if 'anio' not in df.columns:
+        return jsonify({"error": "Los datos no contienen la columna 'anio'."}), 400
 
     # Contar el número de mensajes por año y ordenarlos (opcionalmente en orden ascendente)
-    TopYear = df['Year'].value_counts().sort_index()  # sort_index() ordena por año
+    TopYear = df['anio'].value_counts().sort_index()  # sort_index() ordena por año
     print("Datos por año:", TopYear)
 
     # Crear la figura y los ejes
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Crear el gráfico de barras: 
-    # Convertimos el índice a string para que se muestre correctamente en el eje X
+    # Crear el gráfico de barras
     bars = ax.bar(TopYear.index.astype(str), TopYear.values, color='#32CD32')
 
     # Agregar etiquetas encima de cada barra
     for idx, value in enumerate(TopYear.values):
-        # Colocamos la etiqueta centrada sobre la barra
         ax.text(idx, value + 15, str(int(value)), ha='center', va='bottom', color='black', fontsize=10)
 
     # Configurar etiquetas del eje X y el título
@@ -377,22 +409,32 @@ def plot_mensajes_año():
 
     # Devolver la imagen como respuesta HTTP
     return send_file(img, mimetype='image/png')
+
 @app.route('/plot_mensajes_mes.png', methods=['GET'])
 def plot_mensajes_mes():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar el gráfico. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir ultimos_mensajes a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero (importante para evitar errores)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    # Verificar que la columna 'Month' exista
-    if 'Month' not in df.columns:
-        return jsonify({"error": "Los datos no contienen la columna 'Month'."}), 400
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
 
-    # Contar los mensajes según el mes y ordenar (si los nombres son 'Ene', 'Feb', etc., se puede ordenar manualmente)
-    TopMonth = df['Month'].value_counts().sort_index()
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+
+    # Verificar que la columna 'Month' existe en el DataFrame
+    if 'mes' not in df.columns:
+        return jsonify({"error": "Los datos no contienen la columna 'mes'."}), 400
+
+    # Contar el número de mensajes por mes y ordenarlos (opcionalmente en orden ascendente)
+    TopMonth = df['mes'].value_counts().sort_index()  # sort_index() ordena por mes
     print("Conteo por mes:", TopMonth)
 
     # Crear la figura y los ejes
@@ -403,9 +445,9 @@ def plot_mensajes_mes():
     for a, b in enumerate(TopMonth.values):
         ax.text(a - 0.12, b + 15, str(int(b)), ha='center', color='black', fontsize=10)
 
-    # Configurar las etiquetas y el título
+    # Configurar las etiquetas del eje X y el título
     ax.set_xticklabels(TopMonth.index, rotation=0, fontsize=10)
-    ax.set_yticks([])
+    ax.set_yticks([])  # Ocultar marcas del eje Y
     ax.set_title('Mensajes por Mes', fontsize=13, fontweight='bold')
     fig.tight_layout()
 
@@ -420,23 +462,32 @@ def plot_mensajes_mes():
 
 @app.route('/plot_horas_completo.png', methods=['GET'])
 def plot_horas_completo_png():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar el gráfico de horas. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir los datos limpios a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    # Verificar si las columnas necesarias existen
-    if 'Time' not in df.columns or 'Format' not in df.columns:
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+
+    # Verificar que las columnas necesarias existen
+    if 'hora' not in df.columns or 'formato' not in df.columns:
         return jsonify({"error": "Los datos no contienen la información de tiempo y formato."}), 400
 
     # Extraer solo la hora (sin minutos) y convertirla en número
-    df['Hora'] = df['Time'].str.split(':').str[0].astype(int)  # Obtener solo la hora en número
+    df['Hora'] = df['hora'].str.split(':').str[0].astype(int)  # Obtener solo la hora en número
 
     # Concatenar la hora con AM o PM
-    df['Hora_Formato'] = df['Hora'].astype(str) + ' ' + df['Format']
+    df['Hora_Formato'] = df['Hora'].astype(str) + ' ' + df['formato']
 
     # Contar mensajes por cada hora con AM/PM
     horas_activas = df['Hora_Formato'].value_counts().sort_index()
@@ -469,23 +520,31 @@ def plot_horas_completo_png():
 
 @app.route('/plot_timeline.png', methods=['GET'])
 def plot_timeline():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos disponibles para generar la línea temporal. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir los datos limpios a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
     # Agrupar por año, número de mes y mes, contando la cantidad de mensajes
-    TimeLine = df.groupby(['Year', 'Num_Month', 'Month']).count()['Message'].reset_index()
+    TimeLine = df.groupby(['anio', 'num_mes', 'mes']).count()['mensaje'].reset_index()
 
     # Crear una nueva columna con la combinación de Mes y Año
-    TimeLine['Time'] = TimeLine.apply(lambda row: f"{row['Month']}-{row['Year']}", axis=1)
+    TimeLine['hora'] = TimeLine.apply(lambda row: f"{row['mes']}-{row['anio']}", axis=1)
 
     # Crear la figura del gráfico
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(TimeLine['Time'], TimeLine['Message'], marker='o', linestyle='-', color='#32CD32')
+    ax.plot(TimeLine['hora'], TimeLine['mensaje'], marker='o', linestyle='-', color='#32CD32')
 
     # Mejoras en el gráfico
     plt.xticks(rotation=45, size=10)  # Rotar las etiquetas del eje X para mejor lectura
@@ -504,45 +563,55 @@ def plot_timeline():
     # Devolver la imagen como respuesta HTTP
     return send_file(img, mimetype='image/png')
 
+
 @app.route('/plot_mensajes_por_dia.png', methods=['GET'])
 def plot_mensajes_por_dia():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar el gráfico. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir los datos limpios a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Convertir la columna de fecha a formato datetime
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+    df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%Y')
 
     # Agrupar por fecha y contar los mensajes
-    Daily_LineTime = df.groupby('Date').count()['Message'].reset_index()
+    Daily_LineTime = df.groupby('fecha').count()['mensaje'].reset_index()
 
     # Ordenar los días con más mensajes
-    Daily_LineTime_Sort = Daily_LineTime.sort_values(by='Message', ascending=False).reset_index(drop=True)
+    Daily_LineTime_Sort = Daily_LineTime.sort_values(by='mensaje', ascending=False).reset_index(drop=True)
 
     # Crear la figura
     fig, ax = plt.subplots(figsize=(12, 6))
 
     # Graficar la línea temporal de mensajes por día
-    ax.plot(Daily_LineTime['Date'], Daily_LineTime['Message'], color='#32CD32', marker='o', linestyle='-')
+    ax.plot(Daily_LineTime['fecha'], Daily_LineTime['mensaje'], color='#32CD32', marker='o', linestyle='-')
 
     # Resaltar los 5 días con más mensajes
     colores = ['red', 'green', 'purple', 'orange', 'black']
     for i in range(min(5, len(Daily_LineTime_Sort))):
         ax.scatter(
-            Daily_LineTime_Sort.Date[i], 
-            Daily_LineTime_Sort.Message[i], 
+            Daily_LineTime_Sort.fecha[i], 
+            Daily_LineTime_Sort.mensaje[i], 
             color=colores[i], 
             marker='o', 
-            label=f"{Daily_LineTime_Sort.Date[i].strftime('%Y-%m-%d')} ({Daily_LineTime_Sort.Message[i]} msg)"
+            label=f"{Daily_LineTime_Sort.fecha[i].strftime('%Y-%m-%d')} ({Daily_LineTime_Sort.mensaje[i]} msg)"
         )
 
     # Configuración de ejes y etiquetas
-    ax.set_xticks(Daily_LineTime['Date'][::max(1, len(Daily_LineTime) // 10)])  # Espaciar bien las fechas
-    ax.set_xticklabels(Daily_LineTime['Date'][::max(1, len(Daily_LineTime) // 10)].dt.strftime('%Y-%m-%d'), rotation=15, fontsize=9)
+    ax.set_xticks(Daily_LineTime['fecha'][::max(1, len(Daily_LineTime) // 10)])  # Espaciar bien las fechas
+    ax.set_xticklabels(Daily_LineTime['fecha'][::max(1, len(Daily_LineTime) // 10)].dt.strftime('%Y-%m-%d'), rotation=15, fontsize=9)
     ax.set_yticks([])  # Ocultar líneas del eje Y para un diseño más limpio
     ax.set_title('Línea Temporal de Mensajes por Día', fontsize=13, fontweight='bold')
 
@@ -557,6 +626,7 @@ def plot_mensajes_por_dia():
 
     # Devolver la imagen como respuesta HTTP
     return send_file(img, mimetype='image/png')
+
 
 ####FUNCIONES DE LIMPIEZA DE DATOS PARA EL WORDCLOUD
 # 🔹 Función para eliminar tildes
@@ -605,23 +675,32 @@ def delete_emoji(texto):
 ######FIN DE FUNCIONES DE LIMPIEZA DE DATOS PARA EL WORDCLOUD
 @app.route('/plot_nube_palabras.png', methods=['GET'])
 def plot_nube_palabras():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de los parámetros de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles para generar la nube de palabras. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
+
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos con el user_token
+    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Obtener la fecha desde los parámetros de la URL
     fecha_str = request.args.get('fecha')  # Formato esperado: YYYY-MM-DD
 
-    # Convertir los datos limpios a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
-
     # Convertir la columna de fecha a formato datetime
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+    df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%Y')
 
     # Validar el rango de fechas disponibles
-    fecha_min = df['Date'].min().strftime('%Y-%m-%d')
-    fecha_max = df['Date'].max().strftime('%Y-%m-%d')
+    fecha_min = df['fecha'].min().strftime('%Y-%m-%d')
+    fecha_max = df['fecha'].max().strftime('%Y-%m-%d')
 
     if fecha_str:
         try:
@@ -630,21 +709,21 @@ def plot_nube_palabras():
             return jsonify({"error": f"Formato de fecha incorrecto. Usa YYYY-MM-DD. Rango válido: {fecha_min} a {fecha_max}"}), 400
 
         # Verificar si la fecha está dentro del rango de datos
-        if fecha_seleccionada < df['Date'].min() or fecha_seleccionada > df['Date'].max():
+        if fecha_seleccionada < df['fecha'].min() or fecha_seleccionada > df['fecha'].max():
             return jsonify({"error": f"La fecha seleccionada está fuera del rango disponible ({fecha_min} - {fecha_max})."}), 400
     else:
         # Si no se especifica una fecha, seleccionar el día con más mensajes
-        Daily_LineTime = df.groupby('Date').count()['Message'].reset_index()
-        fecha_seleccionada = Daily_LineTime.sort_values(by='Message', ascending=False).iloc[0]['Date']
+        Daily_LineTime = df.groupby('fecha').count()['mensaje'].reset_index()
+        fecha_seleccionada = Daily_LineTime.sort_values(by='mensaje', ascending=False).iloc[0]['fecha']
 
     # Filtrar mensajes de la fecha seleccionada
-    df_fecha = df[(df['Date'] == fecha_seleccionada) & (df['Message'] != '<Multimedia omitido>')]
+    df_fecha = df[(df['fecha'] == fecha_seleccionada) & (df['mensaje'] != '<Multimedia omitido>')]
 
     if df_fecha.empty:
         return jsonify({"error": f"No hay mensajes disponibles para la fecha {fecha_seleccionada.strftime('%Y-%m-%d')}."}), 404
 
     # Unir los mensajes en un solo texto
-    text = ' '.join(df_fecha['Message'])
+    text = ' '.join(df_fecha['mensaje'])
 
     # Aplicar funciones de limpieza
     text = delete_emoji(text)
@@ -670,15 +749,25 @@ def plot_nube_palabras():
     # Devolver la imagen como respuesta HTTP
     return send_file(img, mimetype='image/png')
 
+####Aca me quedo , falta lo del front pero esto ya funci    ona####
 @app.route('/analisis_sentimientos', methods=['GET'])
 def analisis_sentimientos():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir a DataFrame
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Aplicar análisis de sentimiento
     def obtener_sentimiento(texto):
@@ -693,9 +782,9 @@ def analisis_sentimientos():
         else:
             return "neutro"
 
-    df['Sentimiento'] = df['Message'].apply(obtener_sentimiento)
+    df['Sentimiento'] = df['mensaje'].apply(obtener_sentimiento)
 
-    # Contar los tipos de sentimientos
+    # Contar los tipos de sentimientos en porcentaje
     conteo_sentimientos = df['Sentimiento'].value_counts(normalize=True) * 100
 
     # Devolver los porcentajes
@@ -707,14 +796,25 @@ def analisis_sentimientos():
 
     return jsonify(resultado), 200
 
+
 @app.route('/mensajes_mayor_emocion', methods=['GET'])
 def mensajes_mayor_emocion():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Aplicar análisis de sentimiento
     def obtener_puntaje(texto):
@@ -723,11 +823,11 @@ def mensajes_mayor_emocion():
 
         return sia.polarity_scores(texto)['compound']
 
-    df['Puntaje_Sentimiento'] = df['Message'].apply(obtener_puntaje)
+    df['Puntaje_Sentimiento'] = df['mensaje'].apply(obtener_puntaje)
 
-    # Obtener los mensajes con mayor carga emocional
-    top_positivos = df.nlargest(5, 'Puntaje_Sentimiento')[['Date', 'Author', 'Message', 'Puntaje_Sentimiento']]
-    top_negativos = df.nsmallest(5, 'Puntaje_Sentimiento')[['Date', 'Author', 'Message', 'Puntaje_Sentimiento']]
+    # Obtener los 5 mensajes con mayor y menor carga emocional
+    top_positivos = df.nlargest(5, 'Puntaje_Sentimiento')[['fecha', 'autor', 'mensaje', 'Puntaje_Sentimiento']]
+    top_negativos = df.nsmallest(5, 'Puntaje_Sentimiento')[['fecha', 'autor', 'mensaje', 'Puntaje_Sentimiento']]
 
     # Convertir a JSON
     resultado = {
@@ -737,17 +837,27 @@ def mensajes_mayor_emocion():
 
     return jsonify(resultado), 200
 
+
 @app.route('/sentimientos_por_dia.png', methods=['GET'])
 def sentimientos_por_dia():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    try:
+        user_token = int(user_token)  # Convertir user_token a entero
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Asegurar que la fecha está en formato datetime
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+    df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%Y')
 
     # Aplicar análisis de sentimiento
     def obtener_sentimiento(texto):
@@ -762,10 +872,10 @@ def sentimientos_por_dia():
         else:
             return "neutro"
 
-    df['Sentimiento'] = df['Message'].apply(obtener_sentimiento)
+    df['Sentimiento'] = df['mensaje'].apply(obtener_sentimiento)
 
     # Contar los sentimientos por día
-    tendencia = df.groupby(['Date', 'Sentimiento']).size().unstack(fill_value=0)
+    tendencia = df.groupby(['fecha', 'Sentimiento']).size().unstack(fill_value=0)
 
     # Graficar la tendencia de sentimientos
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -790,31 +900,59 @@ def sentimientos_por_dia():
 
 @app.route('/sentimiento_promedio_dia.png', methods=['GET'])
 def sentimiento_promedio_dia():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    # Convertir la fecha a formato datetime
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+
+    # Convertir la columna de fecha a formato datetime
+    df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%Y')
 
     # Aplicar análisis de sentimiento
-    df['Puntaje_Sentimiento'] = df['Message'].apply(lambda x: sia.polarity_scores(x)['compound'] if isinstance(x, str) else 0)
+    df['Puntaje_Sentimiento'] = df['mensaje'].apply(
+        lambda x: sia.polarity_scores(x)['compound'] if isinstance(x, str) else 0
+    )
 
     # Agrupar por día y calcular el puntaje promedio
-    sentimiento_por_dia = df.groupby('Date')['Puntaje_Sentimiento'].mean()
+    sentimiento_por_dia = df.groupby('fecha')['Puntaje_Sentimiento'].mean()
 
-    # Graficar
+    # Seleccionar los 15 días con mayor carga emocional (positivo o negativo)
+    top_dias = sentimiento_por_dia.abs().nlargest(15).index  # Obtener las fechas con mayor magnitud de sentimiento
+    sentimiento_filtrado = sentimiento_por_dia.loc[top_dias].sort_index()
+
+    # Crear el gráfico
     fig, ax = plt.subplots(figsize=(12, 6))
-    sentimiento_por_dia.plot(kind='bar', color=['green' if v > 0 else 'red' for v in sentimiento_por_dia], ax=ax)
+    bars = sentimiento_filtrado.plot(
+        kind='bar',
+        color=['green' if v > 0 else 'red' for v in sentimiento_filtrado],
+        ax=ax
+    )
 
-    ax.set_title("Sentimiento Promedio por Día", fontsize=13, fontweight='bold')
-    ax.set_xlabel("Fecha", fontsize=11)
-    ax.set_ylabel("Puntaje de Sentimiento", fontsize=11)
-    plt.xticks(rotation=45, fontsize=9)
-    plt.grid()
+    # Agregar etiquetas con los puntajes sobre las barras
+    for bar in bars.patches:
+        ax.annotate(
+            f'{bar.get_height():.2f}', 
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()), 
+            ha='center', va='bottom', fontsize=10, fontweight='bold', color='black'
+        )
+
+    ax.set_title("Top 15 días con mayor carga emocional", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Fecha", fontsize=12)
+    ax.set_ylabel("Puntaje de Sentimiento", fontsize=12)
+    plt.xticks(rotation=45, fontsize=10)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
 
     # Guardar imagen en BytesIO
     img = io.BytesIO()
@@ -827,25 +965,37 @@ def sentimiento_promedio_dia():
 
 @app.route('/top_palabras_sentimiento', methods=['GET'])
 def top_palabras_sentimiento():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
     # Aplicar análisis de sentimiento
-    df['Puntaje_Sentimiento'] = df['Message'].apply(lambda x: sia.polarity_scores(x)['compound'] if isinstance(x, str) else 0)
+    df['Puntaje_Sentimiento'] = df['mensaje'].apply(
+        lambda x: sia.polarity_scores(x)['compound'] if isinstance(x, str) else 0
+    )
 
     # Separar mensajes positivos y negativos
-    positivos = ' '.join(df[df['Puntaje_Sentimiento'] > 0]['Message']).lower()
-    negativos = ' '.join(df[df['Puntaje_Sentimiento'] < 0]['Message']).lower()
+    positivos = ' '.join(df[df['Puntaje_Sentimiento'] > 0]['mensaje']).lower()
+    negativos = ' '.join(df[df['Puntaje_Sentimiento'] < 0]['mensaje']).lower()
 
-    # Limpiar y contar palabras
+    # Función para limpiar y contar palabras más comunes
     def contar_palabras(texto):
-        texto = remove_puntuation(delete_tilde(texto))
+        texto = remove_puntuation(delete_tilde(texto))  # Limpiar texto
         palabras = texto.split()
-        return Counter(palabras).most_common(10)
+        return Counter(palabras).most_common(10)  # Top 10 palabras más frecuentes
 
     top_positivas = contar_palabras(positivos)
     top_negativas = contar_palabras(negativos)
@@ -853,16 +1003,26 @@ def top_palabras_sentimiento():
     return jsonify({"top_palabras_positivas": top_positivas, "top_palabras_negativas": top_negativas}), 200
 
 
-
 @app.route('/grafico_emociones.png', methods=['GET'])
 def grafico_emociones():
-    global ultimos_mensajes
+    user_token = request.args.get("user_token")  # Obtener user_token de la URL
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    # Convertir user_token a entero
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
+    # Obtener los datos desde la base de datos
+    df = obtener_datos(user_token)  # Función que consulta la BD
+
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+
+    # Aplicar análisis de emociones
     def detectar_emociones(texto):
         if not isinstance(texto, str):
             return {}
@@ -870,17 +1030,22 @@ def grafico_emociones():
         emociones = NRCLex(texto).raw_emotion_scores
         return emociones
 
-    # Aplicar la función a todos los mensajes
-    df['Emociones'] = df['Message'].apply(detectar_emociones)
+    df['Emociones'] = df['mensaje'].apply(detectar_emociones)
 
-    # Contar las emociones
+    # Contar las emociones totales
     emociones_totales = Counter()
     for emociones in df['Emociones']:
         emociones_totales.update(emociones)
 
+    traduccion_emociones = {
+        'joy': 'feli',
+        'sadness': 'tite',
+        'anger': 'nojado',
+        'fear': 'Cosplay de Daseroth'
+    }
     # Seleccionar las principales emociones a graficar
     emociones_relevantes = ['joy', 'sadness', 'anger', 'fear']
-    datos_emociones = {emocion: emociones_totales.get(emocion, 0) for emocion in emociones_relevantes}
+    datos_emociones = {traduccion_emociones[emocion]: emociones_totales.get(emocion, 0) for emocion in emociones_relevantes}
 
     # Graficar
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -899,27 +1064,53 @@ def grafico_emociones():
 
     return send_file(img, mimetype='image/png')
 
+# Diccionario de palabras tóxicas
+palabras_toxicas = {
+    "idiota", "estúpido", "imbécil", "tonto", "odiar", "asco", "muere", "cállate",
+    "gay", "cabro", "mierda", "puta", "perra", "suicidate", "negro", "tonta",
+    "muerete", "calla", "concha", "ctm", "pta", "pto", "homosexual" ,"mrda" ,"estupida" , "Lol", "lol", "valo" "ctmr"  
+    
+}
 
-@app.route('/mensajes_conflictivos', methods=['GET'])
-def mensajes_conflictivos():
-    global ultimos_mensajes
+@app.route('/conteo_toxicidad', methods=['GET'])
+def conteo_toxicidad():
+    user_token = request.args.get("user_token")
 
-    if not ultimos_mensajes:
-        return jsonify({"error": "No hay datos limpios disponibles. Carga un archivo primero."}), 404
+    if not user_token:
+        return jsonify({"error": "Falta el user_token"}), 400
 
-    df = pd.DataFrame(ultimos_mensajes)
+    try:
+        user_token = int(user_token)
+    except ValueError:
+        return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    def detectar_toxicidad(texto):
-        if not isinstance(texto, str):
-            return 0
-        return TextBlob(texto).sentiment.polarity
+    df = obtener_datos(user_token)
 
-    df['Toxicidad'] = df['Message'].apply(detectar_toxicidad)
+    if df is None or df.empty:
+        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
-    # Obtener los mensajes más tóxicos (negativos extremos)
-    top_conflictivos = df.nsmallest(5, 'Toxicidad')[['Date', 'Author', 'Message', 'Toxicidad']]
+    # Diccionario para contar palabras tóxicas por usuario
+    conteo_por_usuario = defaultdict(Counter)
 
-    return jsonify({"mensajes_conflictivos": top_conflictivos.to_dict(orient="records")}), 200
+    # Evaluar toxicidad por usuario
+    for _, row in df.iterrows():
+        autor = row['autor']
+        mensaje = row['mensaje']
+
+        if isinstance(mensaje, str) and mensaje != "<Multimedia omitido>":
+            palabras_mensaje = mensaje.lower().split()  # Convertir en lista de palabras
+            palabras_toxicas_encontradas = [p for p in palabras_mensaje if p in palabras_toxicas]
+
+            # Actualizar el conteo del usuario
+            conteo_por_usuario[autor].update(palabras_toxicas_encontradas)
+
+    # Convertir el resultado en formato JSON
+    resultado = {
+        usuario: dict(conteo) for usuario, conteo in conteo_por_usuario.items()
+    }
+
+    return jsonify({"conteo_toxicidad": resultado}), 200
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
 
