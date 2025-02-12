@@ -20,3 +20,4 @@ PyJWT==2.10.1
 DateTime==5.4
 greenlet==3.1.1 
 sqlalchemy==2.0.38
+vaderSentiment==3.3.2
