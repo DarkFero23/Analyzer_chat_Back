@@ -31,6 +31,7 @@ from textblob import TextBlob
 from nrclex import NRCLex
 import uuid
 from nltk.corpus import stopwords
+import zipfile
 
 nltk.download('stopwords')
 stop_words = set(stopwords.words('spanish'))  # Lista de palabras irrelevantes en español
@@ -118,34 +119,54 @@ def upload():
         user_token = cursor.fetchone()[0]  # Nuevo user_token único
 
         nombre_archivo = file.filename
-        contenido = file.read().decode("utf-8", errors="replace")  # Manejo seguro de caracteres especiales
+        extension = nombre_archivo.split('.')[-1].lower()
 
-        # ✅ Guardar en `archivos_chat`
-        cursor.execute("INSERT INTO archivos_chat (nombre_archivo, contenido, user_token) VALUES (%s, %s, %s) RETURNING id;", 
-                       (nombre_archivo, contenido, user_token))
-        archivo_id = cursor.fetchone()[0]
-        conn.commit()
+        if extension == 'zip':
+            # 📌 Leer el ZIP en memoria sin extraerlo a disco
+            with zipfile.ZipFile(io.BytesIO(file.read()), 'r') as zip_ref:
+                archivos_txt = [f for f in zip_ref.namelist() if f.endswith('.txt')]
 
-        # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
-        df = DataFrame_Data(contenido, nombre_archivo, user_token)
+                # ❌ Si hay más de 1 archivo TXT, dar error
+                if len(archivos_txt) == 0:
+                    return jsonify({"error": "El archivo .zip no contiene archivos .txt"}), 400
+                if len(archivos_txt) > 1:
+                    return jsonify({"error": "El archivo .zip debe contener solo un archivo .txt"}), 400
 
-        if df.empty:
-            return jsonify({"error": "No se pudieron procesar los mensajes"}), 500
+                # ✅ Extraer el único archivo .txt
+                archivo_txt = archivos_txt[0]
+                with zip_ref.open(archivo_txt) as f:
+                    contenido = f.read().decode("utf-8", errors="replace")
 
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False, header=False, sep="|")
-        csv_buffer.seek(0)
+                    # ✅ Guardar en `archivos_chat`
+                    cursor.execute("""
+                        INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
+                        VALUES (%s, %s, %s) RETURNING id;
+                    """, (archivo_txt, contenido, user_token))
+                    archivo_id = cursor.fetchone()[0]
+                    conn.commit()
 
-        cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
-            'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio', 'hora', 'formato', 'autor', 'mensaje', 'user_token'
-        ])
-        conn.commit()
+                    # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
+                    df = DataFrame_Data(contenido, archivo_txt, user_token)
+                    if df.empty:
+                        return jsonify({"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}), 500
 
-        print(f"✅ Archivo limpio guardado con user_token {user_token}.")
+                    csv_buffer = io.StringIO()
+                    df.to_csv(csv_buffer, index=False, header=False, sep="|")
+                    csv_buffer.seek(0)
+
+                    cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
+                        'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio',
+                        'hora', 'formato', 'autor', 'mensaje', 'user_token'
+                    ])
+                    conn.commit()
+
+                    print(f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}")
+
+        else:
+            return jsonify({"error": "Solo se aceptan archivos .zip"}), 400
 
         return jsonify({
-            "message": f"Archivo '{nombre_archivo}' listo para hacer análisis.",
-            "archivo_id": archivo_id,
+            "message": f"Archivo '{archivo_txt}' listo para analizar.",
             "user_token": user_token  # 🔥 Devolver el user_token al frontend
         }), 200
 
@@ -155,7 +176,6 @@ def upload():
     finally:
         cursor.close()
         conn.close()
-        
 @app.route('/get_statistics', methods=['GET'])
 def get_statistics():
     user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
