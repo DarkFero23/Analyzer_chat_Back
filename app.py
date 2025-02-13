@@ -593,7 +593,7 @@ def plot_mensajes_por_dia():
     Daily_LineTime_Sort = Daily_LineTime.sort_values(by='mensaje', ascending=False).reset_index(drop=True)
 
     # Crear la figura
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # Graficar la línea temporal de mensajes por día
     ax.plot(Daily_LineTime['fecha'], Daily_LineTime['mensaje'], color='#32CD32', marker='o', linestyle='-')
@@ -878,7 +878,7 @@ def sentimientos_por_dia():
     tendencia = df.groupby(['fecha', 'Sentimiento']).size().unstack(fill_value=0)
 
     # Graficar la tendencia de sentimientos
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(8, 6))
     tendencia.plot(kind='line', ax=ax, marker='o', color=['green', 'gray', 'red'])
 
     # Etiquetas y título
@@ -933,7 +933,7 @@ def sentimiento_promedio_dia():
     sentimiento_filtrado = sentimiento_por_dia.loc[top_dias].sort_index()
 
     # Crear el gráfico
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(8, 6))
     bars = sentimiento_filtrado.plot(
         kind='bar',
         color=['green' if v > 0 else 'red' for v in sentimiento_filtrado],
@@ -1041,7 +1041,7 @@ def grafico_emociones():
         'joy': 'feli',
         'sadness': 'tite',
         'anger': 'nojado',
-        'fear': 'Cosplay de Daseroth'
+        'fear': 'Miedo'
     }
     # Seleccionar las principales emociones a graficar
     emociones_relevantes = ['joy', 'sadness', 'anger', 'fear']
