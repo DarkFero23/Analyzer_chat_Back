@@ -143,7 +143,7 @@ def upload():
         print(f"✅ Archivo limpio guardado con user_token {user_token}.")
 
         return jsonify({
-            "message": f"Archivo '{nombre_archivo}' subido y limpiado con éxito",
+            "message": f"Archivo '{nombre_archivo}' listo para hacer análisis.",
             "archivo_id": archivo_id,
             "user_token": user_token  # 🔥 Devolver el user_token al frontend
         }), 200
