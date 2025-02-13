@@ -30,10 +30,18 @@ from collections import Counter
 from textblob import TextBlob
 from nrclex import NRCLex
 import uuid
+from nltk.corpus import stopwords
 
+nltk.download('stopwords')
+stop_words = set(stopwords.words('spanish'))  # Lista de palabras irrelevantes en español
 nltk.download('punkt')
 nltk.download('punkt_tab')
 nltk.download('averaged_perceptron_tagger')
+palabras_neutrales = set([
+    "mano", "mas", "ahi", "asi", "vas", "puedo", "aun", "voy", 
+    "hago", "ver", "opcion", "gente", "casa", "wtf", "lol", "hahaha", "god", "dream"
+]
+)
 # Verificar y descargar el lexicón si no está disponible
 try:
     nltk.data.find('sentiment/vader_lexicon.zip')
@@ -963,8 +971,8 @@ def sentimiento_promedio_dia():
     return send_file(img, mimetype='image/png')
 
 
-@app.route('/top_palabras_sentimiento', methods=['GET'])
-def top_palabras_sentimiento():
+@app.route('/top_palabras_usuario', methods=['GET'])
+def top_palabras_usuario():
     user_token = request.args.get("user_token")  # Obtener user_token de la URL
 
     if not user_token:
@@ -982,25 +990,31 @@ def top_palabras_sentimiento():
     if df is None or df.empty:
         return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
-    # Aplicar análisis de sentimiento
-    df['Puntaje_Sentimiento'] = df['mensaje'].apply(
-        lambda x: sia.polarity_scores(x)['compound'] if isinstance(x, str) else 0
-    )
+    if 'autor' not in df.columns or 'mensaje' not in df.columns:
+        return jsonify({"error": "Faltan columnas requeridas (autor, mensaje)"}), 400
 
-    # Separar mensajes positivos y negativos
-    positivos = ' '.join(df[df['Puntaje_Sentimiento'] > 0]['mensaje']).lower()
-    negativos = ' '.join(df[df['Puntaje_Sentimiento'] < 0]['mensaje']).lower()
+    # **FILTRAR MENSAJES QUE CONTENGAN EXACTAMENTE "multimedia omitido"**
+    df = df[~df['mensaje'].str.lower().str.contains(r'\bmultimedia omitido\b', na=False, regex=True)]
 
-    # Función para limpiar y contar palabras más comunes
-    def contar_palabras(texto):
-        texto = remove_puntuation(delete_tilde(texto))  # Limpiar texto
-        palabras = texto.split()
-        return Counter(palabras).most_common(10)  # Top 10 palabras más frecuentes
+    # Diccionario para almacenar el top de palabras por usuario
+    top_palabras_por_usuario = {}
 
-    top_positivas = contar_palabras(positivos)
-    top_negativas = contar_palabras(negativos)
+    # Agrupar por usuario y calcular el top de palabras
+    for usuario, mensajes in df.groupby('autor')['mensaje']:
+        texto_total = ' '.join(mensajes.dropna()).lower()  # Concatenar mensajes del usuario
 
-    return jsonify({"top_palabras_positivas": top_positivas, "top_palabras_negativas": top_negativas}), 200
+        # Limpiar texto y contar palabras
+        texto_total = remove_puntuation(delete_tilde(texto_total))  # Quitar tildes y puntuación
+        palabras = texto_total.split()
+        top_palabras = Counter(palabras).most_common(10)  # Top 10 palabras más usadas
+
+        # Guardar en el diccionario con el usuario como clave
+        top_palabras_por_usuario[usuario] = [
+            {"palabra": palabra, "cantidad": cantidad} for palabra, cantidad in top_palabras
+        ]  # Convertir lista de tuplas en lista de diccionarios
+
+    return jsonify({"top_palabras_por_usuario": top_palabras_por_usuario}), 200
+
 
 
 @app.route('/grafico_emociones.png', methods=['GET'])
