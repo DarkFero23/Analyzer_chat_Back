@@ -2,13 +2,14 @@ import re
 import pandas as pd
 import os
 import unicodedata
+import regex as re  # 🔥 Necesitas usar `regex` en vez de `re`
 #-----Funcion que detecta la fecha y hora de los mensajes
 def Date_Chat(l):
     pattern = r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\. m\. -'
     return re.match(pattern, l) is not None
 #---Funcion que detecta el autor de los mensajes
 def IsAuthor(l):
-    pattern = r'^([+]\d{2} \d{3} \d{7}|[A-Za-zÀ-ÖØ-öø-ÿ\s]+):'
+    pattern = r'^(?:\+\d{2} \d{3} \d{7}|[\p{L}\p{M}\p{N}\p{S}\p{P}\s]+):'
     result = re.match(pattern, l)
     return result is not None
 #---Funcion que detecta el autor de los mensajes

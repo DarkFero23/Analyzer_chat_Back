@@ -118,13 +118,14 @@ def upload():
         user_token = cursor.fetchone()[0]  # Nuevo user_token único
 
         nombre_archivo = file.filename
-        contenido = file.read().decode("utf-8")
+        contenido = file.read().decode("utf-8", errors="replace")  # Manejo seguro de caracteres especiales
 
         # ✅ Guardar en `archivos_chat`
         cursor.execute("INSERT INTO archivos_chat (nombre_archivo, contenido, user_token) VALUES (%s, %s, %s) RETURNING id;", 
                        (nombre_archivo, contenido, user_token))
         archivo_id = cursor.fetchone()[0]
         conn.commit()
+
         # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
         df = DataFrame_Data(contenido, nombre_archivo, user_token)
 
@@ -154,7 +155,7 @@ def upload():
     finally:
         cursor.close()
         conn.close()
-
+        
 @app.route('/get_statistics', methods=['GET'])
 def get_statistics():
     user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
