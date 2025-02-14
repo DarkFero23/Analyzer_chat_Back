@@ -36,7 +36,7 @@ import matplotlib.font_manager as fm
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from PIL import Image
 import requests
-
+import csv
 
 nltk.download('stopwords')
 stop_words = set(stopwords.words('spanish'))  # Lista de palabras irrelevantes en español
@@ -119,26 +119,32 @@ def upload():
     try:
         cursor = conn.cursor()
 
-        # 🔥 Buscar el último user_token y aumentarlo en 1
+        # 🔥 Obtener un nuevo user_token
         cursor.execute("SELECT COALESCE(MAX(user_token::INTEGER), 0) + 1 FROM archivos_chat;")
-        user_token = cursor.fetchone()[0]  # Nuevo user_token único
+        user_token = cursor.fetchone()[0]
 
         nombre_archivo = file.filename
         extension = nombre_archivo.split('.')[-1].lower()
 
         if extension == 'zip':
-            # 📌 Leer el ZIP en memoria sin extraerlo a disco
             with zipfile.ZipFile(io.BytesIO(file.read()), 'r') as zip_ref:
                 archivos_txt = [f for f in zip_ref.namelist() if f.endswith('.txt')]
 
-                # ❌ Si hay más de 1 archivo TXT, dar error
-                if len(archivos_txt) == 0:
-                    return jsonify({"error": "El archivo .zip no contiene archivos .txt"}), 400
-                if len(archivos_txt) > 1:
-                    return jsonify({"error": "El archivo .zip debe contener solo un archivo .txt"}), 400
+                if not archivos_txt:
+                    return jsonify({
+                        "error": "El archivo .zip no contiene archivos .txt",
+                        "archivos_encontrados": zip_ref.namelist()
+                    }), 400
 
-                # ✅ Extraer el único archivo .txt
+                if len(archivos_txt) > 1:
+                    return jsonify({
+                        "error": "El archivo .zip debe contener solo un archivo .txt",
+                        "archivos_encontrados": archivos_txt
+                    }), 400
+
                 archivo_txt = archivos_txt[0]
+                print(f"📂 Archivo encontrado en ZIP: {archivo_txt}")
+
                 with zip_ref.open(archivo_txt) as f:
                     contenido = f.read().decode("utf-8", errors="replace")
 
@@ -155,10 +161,17 @@ def upload():
                     if df.empty:
                         return jsonify({"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}), 500
 
+                    # 🔥 **Corrección: Asegurar que cada campo está bien formateado**
                     csv_buffer = io.StringIO()
-                    df.to_csv(csv_buffer, index=False, header=False, sep="|")
+                    csv_writer = csv.writer(csv_buffer, delimiter="|", quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+                    for row in df.itertuples(index=False, name=None):
+                        sanitized_row = tuple(str(value).replace('|', ' ') for value in row)  # 🔹 Eliminar `|` dentro de valores
+                        csv_writer.writerow(sanitized_row)
+
                     csv_buffer.seek(0)
 
+                    # **Copiar datos asegurando el formato correcto**
                     cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
                         'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio',
                         'hora', 'formato', 'autor', 'mensaje', 'user_token'
@@ -172,7 +185,7 @@ def upload():
 
         return jsonify({
             "message": f"Archivo '{archivo_txt}' listo para analizar.",
-            "user_token": user_token  # 🔥 Devolver el user_token al frontend
+            "user_token": user_token
         }), 200
 
     except Exception as e:
