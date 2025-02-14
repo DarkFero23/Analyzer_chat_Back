@@ -32,6 +32,11 @@ from nrclex import NRCLex
 import uuid
 from nltk.corpus import stopwords
 import zipfile
+import matplotlib.font_manager as fm
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from PIL import Image
+import requests
+
 
 nltk.download('stopwords')
 stop_words = set(stopwords.words('spanish'))  # Lista de palabras irrelevantes en español
@@ -224,6 +229,7 @@ def get_statistics():
 
 @app.route('/plot.png', methods=['GET'])
 def plot_png():
+    
     user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
 
     if not user_token:
@@ -274,71 +280,49 @@ def plot_png():
     # Devolver la imagen como respuesta HTTP
     return send_file(img, mimetype='image/png')
 
-# --- Endpoint para generar el gráfico de emojis ---
-@app.route('/plot_emojis.png', methods=['GET'])
-def plot_emojis_png():
-    user_token = request.args.get("user_token")  # Recibe el user_token dinámicamente
+
+# --- Endpoint para generar el gráfico de emojis agrupados por usuario ---
+@app.route('/top_emojis', methods=['GET'])
+def obtener_top_emojis():
+    user_token = request.args.get("user_token")
 
     if not user_token:
         return jsonify({"error": "Falta el user_token"}), 400
 
-    # Convertir user_token a entero (importante para evitar errores)
     try:
         user_token = int(user_token)
     except ValueError:
         return jsonify({"error": "El user_token debe ser un número válido"}), 400
 
-    # Obtener los datos relacionados con el user_token
     df = obtener_datos(user_token)
-    
+
     if df is None or df.empty:
         return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
 
-    # Lista para almacenar los emojis
-    emojis = []
-    # Lista de emojis a excluir
     no_emojis = ['🏻', '🏼', '🪄', '🪛', '🏿']
+    top_emojis_por_usuario = {}
 
-    # Recorrer cada mensaje y extraer los emojis
-    for message in df['mensaje']:
-        for ch in str(message):
-            if ch in emoji.EMOJI_DATA and ch not in no_emojis:
-                emojis.append(ch)
+    # Iteramos sobre cada mensaje y su respectivo usuario
+    for _, row in df.iterrows():
+        usuario = row['autor']
+        mensaje = str(row['mensaje'])
 
-    # Convertir la lista en una Serie de Pandas y obtener los 10 emojis más usados
-    emo_series = pd.Series(emojis)
-    top_emojis = emo_series.value_counts().head(10)
-    if top_emojis.empty:
-        return jsonify({"error": "No se encontraron emojis en los mensajes."}), 404
+        for ch in mensaje:
+            if emoji.is_emoji(ch) and ch not in no_emojis:
+                if usuario not in top_emojis_por_usuario:
+                    top_emojis_por_usuario[usuario] = {}
+                if ch not in top_emojis_por_usuario[usuario]:
+                    top_emojis_por_usuario[usuario][ch] = 0
+                top_emojis_por_usuario[usuario][ch] += 1
 
-    # Convertir la serie en un DataFrame
-    emoji_df = pd.DataFrame(top_emojis).reset_index()
-    emoji_df.columns = ['emoji', 'count']
+    # Convertimos el diccionario a una lista de objetos en el formato correcto
+    top_emojis = [
+        {"user": usuario, "emoji": emoji, "count": count}
+        for usuario, emojis in top_emojis_por_usuario.items()
+        for emoji, count in sorted(emojis.items(), key=lambda x: x[1], reverse=True)[:10]
+    ]
 
-    # Crear el gráfico de pastel con Matplotlib
-    fig, ax = plt.subplots(figsize=(10, 10))
-    wedges, texts, autotexts = ax.pie(
-        emoji_df['count'],
-        labels=emoji_df['emoji'],
-        autopct='%1.1f%%',
-        startangle=90,
-        textprops={'fontsize': 14},
-        labeldistance=1.1,
-        pctdistance=0.7
-    )
-    for autotext in autotexts:
-        autotext.set_color('white')
-        autotext.set_fontsize(12)
-    ax.set_title('Gráfico de los 10 emojis utilizados en el chat', fontsize=16, fontweight='bold')
-    fig.tight_layout()
-
-    # Guardar el gráfico en un objeto BytesIO
-    img = io.BytesIO()
-    plt.savefig(img, format='png', bbox_inches='tight')
-    img.seek(0)
-    plt.close(fig)
-
-    return send_file(img, mimetype='image/png')
+    return jsonify({"top_emojis": top_emojis})
 
 @app.route('/plot_dates.png', methods=['GET'])
 def plot_dates_png():
