@@ -9,8 +9,12 @@ def Date_Chat(l):
     return re.match(pattern, l) is not None
 #---Funcion que detecta el autor de los mensajes
 def IsAuthor(l):
-    pattern = r'^(?:\+\d{2} \d{3} \d{7}|[\p{L}\p{M}\p{N}\p{S}\p{P}\s]+):'
+    pattern = r"^([\w\s\p{P}\p{S}~]+):"  # Permite letras, espacios, puntuaciones, símbolos y "~"
     result = re.match(pattern, l)
+    if result:
+            print(f"✅ Autor detectado: {result.group(1)} en línea: {repr(l)}")
+    else:
+            print(f"⚠️ No se detectó autor en: {repr(l)}")
     return result is not None
 #---Funcion que detecta el autor de los mensajes
 def extract_format(DT):
@@ -35,8 +39,8 @@ def DataPoint(line):
     Message = SplitLine[1]  # Mensaje
 
     # 🔹 Normalizar texto para eliminar caracteres raros
-    DT = unicodedata.normalize("NFKC", DT)
-    DT = DT.replace('\u202f', ' ').replace(',', '')  # Eliminar caracteres invisibles y comas innecesarias
+    DT = unicodedata.normalize("NFKC", DT).replace('\u202f', ' ').replace(',', '')  # Normalizar texto
+
 
     DateTime = DT.split(' ')  # Separar por espacios
 
@@ -58,7 +62,9 @@ def DataPoint(line):
         Author = authormes[0]
         Message = authormes[1] if len(authormes) > 1 else "(Mensaje vacío)"
     else:
+        print(f"⚠️ No se detectó autor en línea: {repr(line)}")
         Author = None
+    print(f"📌 Extraído: {Date}, {Time}, {Format}, {Author}, {Message}")
 
     return Date, Time, Format, Author, Message
 
@@ -91,6 +97,7 @@ def DataFrame_Data(content, nombre_archivo,user_token):
 
     if Date and Author and messageBuffer:
         message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
+        print(f"Autor detectado: {repr(Author)}")
         parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text])
 
     df = pd.DataFrame(parsedData, columns=['NombreArchivo', 'Date', 'Time', 'Format', 'Author', 'Message', 'user_token'])

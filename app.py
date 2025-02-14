@@ -37,7 +37,8 @@ from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from PIL import Image
 import requests
 import csv
-
+import unicodedata
+from limpiar_datos import IsAuthor, Date_Chat, DataPoint
 nltk.download('stopwords')
 stop_words = set(stopwords.words('spanish'))  # Lista de palabras irrelevantes en español
 nltk.download('punkt')
@@ -73,6 +74,10 @@ else:
     
     print(f"🔹 Usando base de datos en Render: {DATABASE_URL}")
 # 🔹 Conectar a PostgreSQL (local o en Render)
+
+def normalize_text(text):
+    return unicodedata.normalize("NFC", text)  # NFC mantiene los emojis compuestos
+
 def conectar_bd():
     try:
         # Si se usa Render, requiere SSL
@@ -119,7 +124,6 @@ def upload():
     try:
         cursor = conn.cursor()
 
-        # 🔥 Obtener un nuevo user_token
         cursor.execute("SELECT COALESCE(MAX(user_token::INTEGER), 0) + 1 FROM archivos_chat;")
         user_token = cursor.fetchone()[0]
 
@@ -147,8 +151,10 @@ def upload():
 
                 with zip_ref.open(archivo_txt) as f:
                     contenido = f.read().decode("utf-8", errors="replace")
-
-                    # ✅ Guardar en `archivos_chat`
+                    print("📂 Contenido leído del archivo:")
+                    print(contenido[:500])  # Muestra los primeros 500 caracteres
+                
+                  
                     cursor.execute("""
                         INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
                         VALUES (%s, %s, %s) RETURNING id;
@@ -156,28 +162,25 @@ def upload():
                     archivo_id = cursor.fetchone()[0]
                     conn.commit()
 
-                    # ✅ Limpiar el archivo y guardar en `archivos_limpiados`
                     df = DataFrame_Data(contenido, archivo_txt, user_token)
                     if df.empty:
                         return jsonify({"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}), 500
 
-                    # 🔥 **Corrección: Asegurar que cada campo está bien formateado**
                     csv_buffer = io.StringIO()
                     csv_writer = csv.writer(csv_buffer, delimiter="|", quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
                     for row in df.itertuples(index=False, name=None):
-                        sanitized_row = tuple(str(value).replace('|', ' ') for value in row)  # 🔹 Eliminar `|` dentro de valores
+                        sanitized_row = tuple(str(value).replace('|', ' ') for value in row)
                         csv_writer.writerow(sanitized_row)
 
                     csv_buffer.seek(0)
-
-                    # **Copiar datos asegurando el formato correcto**
+                    
                     cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
                         'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio',
                         'hora', 'formato', 'autor', 'mensaje', 'user_token'
                     ])
                     conn.commit()
-
+                    
                     print(f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}")
 
         else:
