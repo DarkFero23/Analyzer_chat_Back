@@ -11,10 +11,7 @@ def Date_Chat(l):
 def IsAuthor(l):
     pattern = r"^([\w\s\p{P}\p{S}~]+):"  # Permite letras, espacios, puntuaciones, símbolos y "~"
     result = re.match(pattern, l)
-    if result:
-            print(f"✅ Autor detectado: {result.group(1)} en línea: {repr(l)}")
-    else:
-            print(f"⚠️ No se detectó autor en: {repr(l)}")
+ 
     return result is not None
 #---Funcion que detecta el autor de los mensajes
 def extract_format(DT):
@@ -62,9 +59,7 @@ def DataPoint(line):
         Author = authormes[0]
         Message = authormes[1] if len(authormes) > 1 else "(Mensaje vacío)"
     else:
-        print(f"⚠️ No se detectó autor en línea: {repr(line)}")
         Author = None
-    print(f"📌 Extraído: {Date}, {Time}, {Format}, {Author}, {Message}")
 
     return Date, Time, Format, Author, Message
 
