@@ -149,6 +149,6 @@ def DataFrame_Data(content, nombre_archivo,user_token):
     
     df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message','user_token']]
     
-
+    print (df['user_token'])
 
     return df

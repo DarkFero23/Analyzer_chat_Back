@@ -80,7 +80,6 @@ def normalize_text(text):
 
 def conectar_bd():
     try:
-        # Si se usa Render, requiere SSL
         sslmode = "require" if "render.com" in DATABASE_URL else None
         conn = psycopg2.connect(DATABASE_URL, sslmode=sslmode)
         print("✅ Conexión exitosa a PostgreSQL")
@@ -107,7 +106,6 @@ def obtener_datos(user_token):
         print(f"❌ Error al obtener datos: {e}")
         return None
 
-# 🔹 Endpoint para subir archivos y limpiarlos automáticamente
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
@@ -154,7 +152,6 @@ def upload():
                     print("📂 Contenido leído del archivo:")
                     print(contenido[:500])  # Muestra los primeros 500 caracteres
                 
-                  
                     cursor.execute("""
                         INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
                         VALUES (%s, %s, %s) RETURNING id;
@@ -166,21 +163,39 @@ def upload():
                     if df.empty:
                         return jsonify({"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}), 500
 
+                    # 💡 Asegurar que user_token está presente en todas las filas
+                    if "user_token" not in df.columns:
+                        df["user_token"] = user_token  # Si no existe la columna, la creamos
+
+                    df["user_token"] = df["user_token"].fillna(user_token)  # Rellenar NaN con el user_token actual
+                    df["user_token"] = df["user_token"].replace("", user_token)  # Rellenar valores vacíos
+                    df["user_token"] = df["user_token"].astype(str).str.strip()  # Asegurar que es string sin espacios raros
+
+                    # Verificar si aún hay filas sin user_token (esto imprimirá si hay problemas)
+                    if df["user_token"].isnull().sum() > 0 or (df["user_token"] == "").sum() > 0:
+                        print("⚠ Advertencia: Algunas filas aún tienen user_token vacío")
+
                     csv_buffer = io.StringIO()
                     csv_writer = csv.writer(csv_buffer, delimiter="|", quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
-                    for row in df.itertuples(index=False, name=None):
+                    for index, row in enumerate(df.itertuples(index=False, name=None)):
                         sanitized_row = tuple(str(value).replace('|', ' ') for value in row)
-                        csv_writer.writerow(sanitized_row)
+                        print(f"📌 Insertando fila {index + 1}: {sanitized_row}")
 
+                        try:
+                            csv_writer.writerow(sanitized_row)
+                        except Exception as e:
+                            print(f"🚨 ERROR en la fila {index + 1}: {sanitized_row}")
+                            print(f"⚠️ Detalle del error: {str(e)}")
+                        break  # Detener el proceso en la primera fila con error
                     csv_buffer.seek(0)
-                    
+                    print(df.head())  # 💡 Para verificar que 'user_token' tiene valores antes de insertarlo
+
                     cursor.copy_from(csv_buffer, 'archivos_limpiados', sep="|", columns=[
                         'nombre_archivo', 'fecha', 'dia_semana', 'num_dia', 'mes', 'num_mes', 'anio',
                         'hora', 'formato', 'autor', 'mensaje', 'user_token'
                     ])
                     conn.commit()
-                    
                     print(f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}")
 
         else:
@@ -197,6 +212,7 @@ def upload():
     finally:
         cursor.close()
         conn.close()
+
 @app.route('/get_statistics', methods=['GET'])
 def get_statistics():
     user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
