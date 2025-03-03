@@ -5,6 +5,7 @@ import pandas as pd
 from flask import Flask, request, jsonify, send_file, session
 import json
 import matplotlib
+import pandas as pd
 
 matplotlib.use("Agg")
 import nltk
@@ -192,102 +193,88 @@ def upload():
 
                 with zip_ref.open(archivo_txt) as f:
                     contenido = f.read().decode("utf-8", errors="replace")
-                    print("📂 Contenido leído del archivo:")
-                    print(contenido[:500])  # Muestra los primeros 500 caracteres
 
-                    cursor.execute(
-                        """
-                        INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
-                        VALUES (%s, %s, %s) RETURNING id;
-                    """,
-                        (archivo_txt, contenido, user_token),
-                    )
-                    archivo_id = cursor.fetchone()[0]
-                    conn.commit()
-
-                    df = DataFrame_Data(contenido, archivo_txt, user_token)
-                    if df.empty:
-                        return (
-                            jsonify(
-                                {
-                                    "error": f"No se pudieron procesar los mensajes de {archivo_txt}"
-                                }
-                            ),
-                            500,
-                        )
-
-                    # 💡 Asegurar que user_token está presente en todas las filas
-                    if "user_token" not in df.columns:
-                        df["user_token"] = (
-                            user_token  # Si no existe la columna, la creamos
-                        )
-
-                    df["user_token"] = df["user_token"].fillna(
-                        user_token
-                    )  # Rellenar NaN con el user_token actual
-                    df["user_token"] = df["user_token"].replace(
-                        "", user_token
-                    )  # Rellenar valores vacíos
-                    df["user_token"] = (
-                        df["user_token"].astype(str).str.strip()
-                    )  # Asegurar que es string sin espacios raros
-                    # Filtrar filas sin user_token
-                    df = df.dropna(
-                        subset=["user_token"]
-                    )  # Elimina filas con NaN en user_token
-                    df = df[
-                        df["user_token"] != ""
-                    ]  # Elimina filas con user_token vacío
-
-                    csv_buffer = io.StringIO()
-                    csv_writer = csv.writer(
-                        csv_buffer,
-                        delimiter="|",
-                        quotechar='"',
-                        quoting=csv.QUOTE_MINIMAL,
-                    )
-
-                    for index, row in enumerate(df.itertuples(index=False, name=None)):
-                        sanitized_row = tuple(
-                            str(value).replace("|", " ").replace("\\", "")
-                            for value in row  # 🔹 Solución aquí
-                        )
-                        print(f"📌 Insertando fila {index + 1}: {sanitized_row}")
-
-                        try:
-                            csv_writer.writerow(sanitized_row)
-                        except Exception as e:
-                            print(f"🚨 ERROR en la fila {index + 1}: {sanitized_row}")
-                            print(f"⚠️ Detalle del error: {str(e)}")
-                    csv_buffer.seek(0)
-                    print(df.head(10))  # Ver las primeras 10 filas
-
-                    cursor.copy_from(
-                        csv_buffer,
-                        "archivos_limpiados",
-                        sep="|",
-                        columns=[
-                            "nombre_archivo",
-                            "fecha",
-                            "dia_semana",
-                            "num_dia",
-                            "mes",
-                            "num_mes",
-                            "anio",
-                            "hora",
-                            "formato",
-                            "autor",
-                            "mensaje",
-                            "user_token",
-                        ],
-                    )
-                    conn.commit()
-                    print(
-                        f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}"
-                    )
+        elif extension == "txt":
+            archivo_txt = nombre_archivo
+            contenido = file.read().decode("utf-8", errors="replace")
 
         else:
-            return jsonify({"error": "Solo se aceptan archivos .zip"}), 400
+            return jsonify({"error": "Solo se aceptan archivos .zip o .txt"}), 400
+
+        print("📂 Contenido leído del archivo:")
+        print(contenido[:500])  # Muestra los primeros 500 caracteres
+
+        cursor.execute(
+            """
+            INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
+            VALUES (%s, %s, %s) RETURNING id;
+            """,
+            (archivo_txt, contenido, user_token),
+        )
+        archivo_id = cursor.fetchone()[0]
+        conn.commit()
+
+        df = DataFrame_Data(contenido, archivo_txt, user_token)
+        if df.empty:
+            return (
+                jsonify(
+                    {"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}
+                ),
+                500,
+            )
+
+        if "user_token" not in df.columns:
+            df["user_token"] = user_token
+
+        df["user_token"] = df["user_token"].fillna(user_token)
+        df["user_token"] = df["user_token"].replace("", user_token)
+        df["user_token"] = df["user_token"].astype(str).str.strip()
+        df = df.dropna(subset=["user_token"])
+        df = df[df["user_token"] != ""]
+
+        csv_buffer = io.StringIO()
+        csv_writer = csv.writer(
+            csv_buffer,
+            delimiter="|",
+            quotechar='"',
+            quoting=csv.QUOTE_MINIMAL,
+        )
+
+        for index, row in enumerate(df.itertuples(index=False, name=None)):
+            sanitized_row = tuple(
+                str(value).replace("|", " ").replace("\\", "") for value in row
+            )
+            print(f"📌 Insertando fila {index + 1}: {sanitized_row}")
+
+            try:
+                csv_writer.writerow(sanitized_row)
+            except Exception as e:
+                print(f"🚨 ERROR en la fila {index + 1}: {sanitized_row}")
+                print(f"⚠️ Detalle del error: {str(e)}")
+        csv_buffer.seek(0)
+        print(df.head(10))
+
+        cursor.copy_from(
+            csv_buffer,
+            "archivos_limpiados",
+            sep="|",
+            columns=[
+                "nombre_archivo",
+                "fecha",
+                "dia_semana",
+                "num_dia",
+                "mes",
+                "num_mes",
+                "anio",
+                "hora",
+                "formato",
+                "autor",
+                "mensaje",
+                "user_token",
+            ],
+        )
+        conn.commit()
+        print(f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}")
 
         return (
             jsonify(
