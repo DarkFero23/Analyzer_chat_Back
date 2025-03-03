@@ -5,7 +5,6 @@ import pandas as pd
 from flask import Flask, request, jsonify, send_file, session
 import json
 import matplotlib
-import pandas as pd
 
 matplotlib.use("Agg")
 import nltk
@@ -193,16 +192,11 @@ def upload():
 
                 with zip_ref.open(archivo_txt) as f:
                     contenido = f.read().decode("utf-8", errors="replace")
+                    print("📂 Contenido leído del archivo:")
 
         elif extension == "txt":
             archivo_txt = nombre_archivo
             contenido = file.read().decode("utf-8", errors="replace")
-
-        else:
-            return jsonify({"error": "Solo se aceptan archivos .zip o .txt"}), 400
-
-        print("📂 Contenido leído del archivo:")
-        print(contenido[:500])  # Muestra los primeros 500 caracteres
 
         cursor.execute(
             """
@@ -223,12 +217,15 @@ def upload():
                 500,
             )
 
+        # 💡 Asegurar que user_token está presente en todas las filas
         if "user_token" not in df.columns:
-            df["user_token"] = user_token
+            df["user_token"] = user_token  # Si no existe la columna, la creamos
 
-        df["user_token"] = df["user_token"].fillna(user_token)
-        df["user_token"] = df["user_token"].replace("", user_token)
-        df["user_token"] = df["user_token"].astype(str).str.strip()
+        df["user_token"] = df["user_token"].fillna(user_token)  # Rellenar NaN
+        df["user_token"] = df["user_token"].replace("", user_token)  # Rellenar vacíos
+        df["user_token"] = df["user_token"].astype(str).str.strip()  # Limpiar espacios
+
+        # Filtrar filas sin user_token
         df = df.dropna(subset=["user_token"])
         df = df[df["user_token"] != ""]
 
@@ -242,7 +239,8 @@ def upload():
 
         for index, row in enumerate(df.itertuples(index=False, name=None)):
             sanitized_row = tuple(
-                str(value).replace("|", " ").replace("\\", "") for value in row
+                str(value).replace("|", " ").replace("\\", "")
+                for value in row  # 🔹 Solución aquí
             )
             print(f"📌 Insertando fila {index + 1}: {sanitized_row}")
 
@@ -251,8 +249,9 @@ def upload():
             except Exception as e:
                 print(f"🚨 ERROR en la fila {index + 1}: {sanitized_row}")
                 print(f"⚠️ Detalle del error: {str(e)}")
+
         csv_buffer.seek(0)
-        print(df.head(10))
+        print(df.head(10))  # Ver las primeras 10 filas
 
         cursor.copy_from(
             csv_buffer,
