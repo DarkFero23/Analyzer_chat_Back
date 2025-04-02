@@ -11,7 +11,6 @@ def Date_Chat(l):
 def IsAuthor(l):
     pattern = r"^([\w\s\p{P}\p{S}~]+):"  # Permite letras, espacios, puntuaciones, símbolos y "~"
     result = re.match(pattern, l)
- 
     return result is not None
 #---Funcion que detecta el autor de los mensajes
 def extract_format(DT):

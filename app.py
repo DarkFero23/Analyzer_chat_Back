@@ -9,10 +9,8 @@ import matplotlib
 matplotlib.use("Agg")
 import nltk
 from dotenv import load_dotenv
-import jwt
 from datetime import timedelta
 from nltk.sentiment import SentimentIntensityAnalyzer
-import secrets
 from flask_session import Session
 from sqlalchemy import create_engine, text
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -40,7 +38,6 @@ import requests
 import csv
 import unicodedata
 from limpiar_datos import IsAuthor, Date_Chat, DataPoint
-from deep_translator import GoogleTranslator
 
 nltk.download("stopwords")
 stop_words = set(
@@ -96,11 +93,6 @@ else:
 
     print(f"🔹 Usando base de datos en Render: {DATABASE_URL}")
 # 🔹 Conectar a PostgreSQL (local o en Render)
-
-
-def normalize_text(text):
-    return unicodedata.normalize("NFC", text)  # NFC mantiene los emojis compuestos
-
 
 def conectar_bd():
     try:
@@ -860,7 +852,7 @@ def delete_emoji(texto):
 ######FIN DE FUNCIONES DE LIMPIEZA DE DATOS PARA EL WORDCLOUD
 
 
-##FALTA ESTE
+##FALTA ESTE a muerte
 @app.route("/nube_palabras", methods=["GET"])
 def nube_palabras():
     user_token = request.args.get("user_token")
@@ -1158,7 +1150,6 @@ def sentimiento_promedio_dia():
     return jsonify({"top_dias": sentimiento_data})
 
 
-# Aquí deberías colocar tu función 'obtener_datos' o la lógica para obtener los datos de la base de datos
 
 
 # YA ESTA
@@ -1826,4 +1817,4 @@ def buscar_palabra():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)
