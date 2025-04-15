@@ -106,18 +106,18 @@ def conectar_bd():
 
 
 ####FIN DE CONEXION A LA BD########
-def obtener_datos(user_token):
+def obtener_datos(archivo_chat_id):
     conn = conectar_bd()  # Conectamos a la BD
     if conn is None:
         return None
 
     try:
         query = """
-        SELECT nombre_archivo, fecha, dia_semana, num_dia, mes, num_mes, anio, hora, autor, mensaje, formato, user_token
-        FROM archivos_limpiados WHERE user_token = %s;
+        SELECT nombre_archivo, fecha, dia_semana, num_dia, mes, num_mes, anio, hora, autor, mensaje, formato, archivo_chat_id
+        FROM archivos_limpiados WHERE archivo_chat_id = %s;
         """
         df = pd.read_sql_query(
-            query, conn, params=(user_token,)
+            query, conn, params=(archivo_chat_id,)
         )  # Cargar datos en DataFrame
 
         conn.close()
@@ -145,82 +145,57 @@ def upload():
     try:
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT COALESCE(MAX(user_token::INTEGER), 0) + 1 FROM archivos_chat;"
-        )
-        user_token = cursor.fetchone()[0]
-
         nombre_archivo = file.filename
         extension = nombre_archivo.split(".")[-1].lower()
 
+        # Leer contenido según tipo
         if extension == "zip":
             with zipfile.ZipFile(io.BytesIO(file.read()), "r") as zip_ref:
                 archivos_txt = [f for f in zip_ref.namelist() if f.endswith(".txt")]
 
                 if not archivos_txt:
-                    return (
-                        jsonify(
-                            {
-                                "error": "El archivo .zip no contiene archivos .txt",
-                                "archivos_encontrados": zip_ref.namelist(),
-                            }
-                        ),
-                        400,
-                    )
+                    return jsonify({
+                        "error": "El archivo .zip no contiene archivos .txt",
+                        "archivos_encontrados": zip_ref.namelist()
+                    }), 400
 
                 if len(archivos_txt) > 1:
-                    return (
-                        jsonify(
-                            {
-                                "error": "El archivo .zip debe contener solo un archivo .txt",
-                                "archivos_encontrados": archivos_txt,
-                            }
-                        ),
-                        400,
-                    )
+                    return jsonify({
+                        "error": "El archivo .zip debe contener solo un archivo .txt",
+                        "archivos_encontrados": archivos_txt
+                    }), 400
 
                 archivo_txt = archivos_txt[0]
                 print(f"📂 Archivo encontrado en ZIP: {archivo_txt}")
 
                 with zip_ref.open(archivo_txt) as f:
                     contenido = f.read().decode("utf-8", errors="replace")
-                    print("📂 Contenido leído del archivo:")
 
         elif extension == "txt":
             archivo_txt = nombre_archivo
             contenido = file.read().decode("utf-8", errors="replace")
+        else:
+            return jsonify({"error": "Formato de archivo no permitido"}), 400
 
+        # Guardar archivo original en la tabla archivos_chat
         cursor.execute(
             """
-            INSERT INTO archivos_chat (nombre_archivo, contenido, user_token)
-            VALUES (%s, %s, %s) RETURNING id;
+            INSERT INTO archivos_chat (nombre_archivo, contenido, fecha)
+            VALUES (%s, %s, NOW()) RETURNING id;
             """,
-            (archivo_txt, contenido, user_token),
+            (archivo_txt, contenido),
         )
-        archivo_id = cursor.fetchone()[0]
+        archivo_chat_id = cursor.fetchone()[0]
         conn.commit()
 
-        df = DataFrame_Data(contenido, archivo_txt, user_token)
+        # Procesar contenido
+        df = DataFrame_Data(contenido, archivo_txt, archivo_chat_id)
         if df.empty:
-            return (
-                jsonify(
-                    {"error": f"No se pudieron procesar los mensajes de {archivo_txt}"}
-                ),
-                500,
-            )
+            return jsonify({
+                "error": f"No se pudieron procesar los mensajes de {archivo_txt}"
+            }), 500
 
-        # 💡 Asegurar que user_token está presente en todas las filas
-        if "user_token" not in df.columns:
-            df["user_token"] = user_token  # Si no existe la columna, la creamos
-
-        df["user_token"] = df["user_token"].fillna(user_token)  # Rellenar NaN
-        df["user_token"] = df["user_token"].replace("", user_token)  # Rellenar vacíos
-        df["user_token"] = df["user_token"].astype(str).str.strip()  # Limpiar espacios
-
-        # Filtrar filas sin user_token
-        df = df.dropna(subset=["user_token"])
-        df = df[df["user_token"] != ""]
-
+        # CSV para copy_from
         csv_buffer = io.StringIO()
         csv_writer = csv.writer(
             csv_buffer,
@@ -232,9 +207,8 @@ def upload():
         for index, row in enumerate(df.itertuples(index=False, name=None)):
             sanitized_row = tuple(
                 str(value).replace("|", " ").replace("\\", "")
-                for value in row  # 🔹 Solución aquí
+                for value in row
             )
-            print(f"📌 Insertando fila {index + 1}: {sanitized_row}")
 
             try:
                 csv_writer.writerow(sanitized_row)
@@ -243,7 +217,7 @@ def upload():
                 print(f"⚠️ Detalle del error: {str(e)}")
 
         csv_buffer.seek(0)
-        print(df.head(10))  # Ver las primeras 10 filas
+        print(df.head(10))
 
         cursor.copy_from(
             csv_buffer,
@@ -261,21 +235,16 @@ def upload():
                 "formato",
                 "autor",
                 "mensaje",
-                "user_token",
+                "archivo_chat_id",
             ],
         )
         conn.commit()
-        print(f"✅ Archivo limpio guardado con user_token {user_token}: {archivo_txt}")
+        print(f"✅ Archivo limpio guardado con archivo_chat_id {archivo_chat_id}: {archivo_txt}")
 
-        return (
-            jsonify(
-                {
-                    "message": f"Archivo '{archivo_txt}' listo para analizar.",
-                    "user_token": user_token,
-                }
-            ),
-            200,
-        )
+        return jsonify({
+            "message": f"Archivo '{archivo_txt}' listo para analizar.",
+            "archivo_chat_id": archivo_chat_id,
+        }), 200
 
     except Exception as e:
         return jsonify({"error": f"Error al procesar el archivo: {str(e)}"}), 500
@@ -284,25 +253,24 @@ def upload():
         cursor.close()
         conn.close()
 
-
 ##YA ESTA
 
 
 @app.route("/get_statistics", methods=["GET"])
 def get_statistics():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # 🔥 Cálculo de estadísticas generales
     total_message = df.shape[0]
@@ -391,20 +359,20 @@ def get_statistics():
 
 @app.route("/plot.json", methods=["GET"])
 def plot_png():
-    user_token = request.args.get("user_token")  # 🔥 Recibe el token dinámicamente
+    archivo_chat_id = request.args.get("archivo_chat_id")  # 🔥 Recibe el token dinámicamente
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)  # 🔹 Convertir user_token a entero
+        archivo_chat_id = int(archivo_chat_id)  # 🔹 Convertir archivo_chat_id a entero
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)  # 🔥 Traer los datos desde la BD
+    df = obtener_datos(archivo_chat_id)  # 🔥 Traer los datos desde la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     if "dia_semana" not in df.columns:
         return (
@@ -417,7 +385,7 @@ def plot_png():
 
     # 🔹 Estructurar los datos en JSON
     response_data = {
-        "user_token": user_token,
+        "archivo_chat_id": archivo_chat_id,
         "activity_per_day": [
             {"day": day, "count": count} for day, count in active_day.items()
         ],
@@ -432,20 +400,20 @@ def plot_png():
 # --- Endpoint para generar el gráfico de emojis agrupados por usuario ---
 @app.route("/top_emojis", methods=["GET"])
 def obtener_top_emojis():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     no_emojis = ["🏻", "🏼", "🪄", "🪛", "🏿"]
     top_emojis_por_usuario = {}
@@ -480,22 +448,22 @@ def obtener_top_emojis():
 
 @app.route("/plot_dates.json", methods=["GET"])
 def plot_dates_json():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    # Obtener los datos desde la base de datos con el user_token
-    df = obtener_datos(user_token)
+    # Obtener los datos desde la base de datos con el archivo_chat_id
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Contar el número de mensajes por fecha y seleccionar los 10 días con mayor actividad
     top_dates = df["fecha"].value_counts().head(10)
@@ -513,21 +481,21 @@ def plot_dates_json():
 
 @app.route("/plot_mensajes_año.json", methods=["GET"])
 def plot_mensajes_año_json():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    # Obtener los datos desde la base de datos con el user_token
-    df = obtener_datos(user_token)
+    # Obtener los datos desde la base de datos con el archivo_chat_id
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     if "anio" not in df.columns:
         return jsonify({"error": "Los datos no contienen la columna 'anio'."}), 400
@@ -547,20 +515,20 @@ def plot_mensajes_año_json():
 
 @app.route("/plot_mensajes_mes.json", methods=["GET"])
 def plot_mensajes_mes():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     if "mes" not in df.columns:
         return jsonify({"error": "Los datos no contienen la columna 'mes'."}), 400
@@ -600,21 +568,21 @@ def plot_mensajes_mes():
 
 @app.route("/horas_completo.json", methods=["GET"])
 def horas_completo_json():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    # Obtener los datos desde la base de datos con el user_token
-    df = obtener_datos(user_token)
+    # Obtener los datos desde la base de datos con el archivo_chat_id
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Verificar que las columnas necesarias existen
     if "hora" not in df.columns or "formato" not in df.columns:
@@ -648,20 +616,20 @@ def horas_completo_json():
 
 @app.route("/plot_timeline.json", methods=["GET"])
 def plot_timeline_json():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Agrupar por año, número de mes y mes, contando la cantidad de mensajes
     TimeLine = df.groupby(["anio", "num_mes", "mes"]).count()["mensaje"].reset_index()
@@ -680,22 +648,22 @@ def plot_timeline_json():
 
 @app.route("/plot_mensajes_por_dia.json", methods=["GET"])
 def plot_mensajes_por_dia():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    # Obtener los datos desde la base de datos con el user_token
-    df = obtener_datos(user_token)  # Llamar a la función que trae los datos
+    # Obtener los datos desde la base de datos con el archivo_chat_id
+    df = obtener_datos(archivo_chat_id)  # Llamar a la función que trae los datos
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Convertir la columna de fecha a formato datetime
     df["fecha"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y")
@@ -855,20 +823,20 @@ def delete_emoji(texto):
 ##FALTA ESTE a muerte
 @app.route("/nube_palabras", methods=["GET"])
 def nube_palabras():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     fecha_str = request.args.get("fecha")
 
@@ -949,22 +917,22 @@ def nube_palabras():
 ####Aca me quedo , falta lo del front pero esto ya funci    ona####
 @app.route("/analisis_sentimientos", methods=["GET"])
 def analisis_sentimientos():
-    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
+    archivo_chat_id = request.args.get("archivo_chat_id")  # Obtener el archivo_chat_id de la URL
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Aplicar análisis de sentimiento en español
     def obtener_sentimiento(texto):
@@ -999,22 +967,22 @@ def analisis_sentimientos():
 # ESTE ESTA MAL NO SE PONE ARREGLAR
 @app.route("/mensajes_mayor_emocion", methods=["GET"])
 def mensajes_mayor_emocion():
-    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
+    archivo_chat_id = request.args.get("archivo_chat_id")  # Obtener el archivo_chat_id de la URL
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Aplicar análisis de sentimiento
     def obtener_puntaje(texto):
@@ -1047,21 +1015,21 @@ def mensajes_mayor_emocion():
 
 @app.route("/sentimientos_por_dia.json", methods=["GET"])
 def sentimientos_por_dia():
-    user_token = request.args.get("user_token")  # Obtener el user_token de la URL
+    archivo_chat_id = request.args.get("archivo_chat_id")  # Obtener el archivo_chat_id de la URL
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)  # Convertir user_token a entero
+        archivo_chat_id = int(archivo_chat_id)  # Convertir archivo_chat_id a entero
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Asegurar que la fecha está en formato datetime
     df["fecha"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y")
@@ -1102,22 +1070,22 @@ def sentimientos_por_dia():
 # YA ESTA
 @app.route("/sentimiento_promedio_dia", methods=["GET"])
 def sentimiento_promedio_dia():
-    user_token = request.args.get("user_token")  # Obtener user_token de la URL
+    archivo_chat_id = request.args.get("archivo_chat_id")  # Obtener archivo_chat_id de la URL
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Convertir la columna de fecha a formato datetime
     df["fecha"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y")
@@ -1155,22 +1123,22 @@ def sentimiento_promedio_dia():
 # YA ESTA
 @app.route("/top_palabras_usuario", methods=["GET"])
 def top_palabras_usuario():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     if "autor" not in df.columns or "mensaje" not in df.columns:
         return jsonify({"error": "Faltan columnas requeridas (autor, mensaje)"}), 400
@@ -1332,19 +1300,19 @@ def top_palabras_usuario():
 ##DUDOSOS NO SE PONE HASTA MEJORAR"""
 @app.route("/grafico_emociones", methods=["GET"])
 def grafico_emociones():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     df["fecha"] = pd.to_datetime(df["fecha"])
 
@@ -1708,20 +1676,20 @@ palabras_toxicas = {
 
 @app.route("/conteo_toxicidad", methods=["GET"])
 def conteo_toxicidad():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
 
-    if not user_token:
-        return jsonify({"error": "Falta el user_token"}), 400
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
 
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
-    df = obtener_datos(user_token)
+    df = obtener_datos(archivo_chat_id)
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     # Diccionario para contar palabras tóxicas por usuario
     conteo_por_usuario = defaultdict(Counter)
@@ -1750,23 +1718,23 @@ def conteo_toxicidad():
 
 @app.route("/buscar_palabra", methods=["GET"])
 def buscar_palabra():
-    user_token = request.args.get("user_token")
+    archivo_chat_id = request.args.get("archivo_chat_id")
     palabra_buscar = request.args.get("palabra")
 
-    if not user_token or not palabra_buscar:
-        return jsonify({"error": "Faltan parámetros (user_token, palabra)"}), 400
+    if not archivo_chat_id or not palabra_buscar:
+        return jsonify({"error": "Faltan parámetros (archivo_chat_id, palabra)"}), 400
 
-    # Convertir user_token a entero
+    # Convertir archivo_chat_id a entero
     try:
-        user_token = int(user_token)
+        archivo_chat_id = int(archivo_chat_id)
     except ValueError:
-        return jsonify({"error": "El user_token debe ser un número válido"}), 400
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
 
     # Obtener los datos desde la base de datos
-    df = obtener_datos(user_token)  # Función que consulta la BD
+    df = obtener_datos(archivo_chat_id)  # Función que consulta la BD
 
     if df is None or df.empty:
-        return jsonify({"error": "No hay datos disponibles para este user_token"}), 404
+        return jsonify({"error": "No hay datos disponibles para este archivo_chat_id"}), 404
 
     if "autor" not in df.columns or "mensaje" not in df.columns:
         return jsonify({"error": "Faltan columnas requeridas (autor, mensaje)"}), 400

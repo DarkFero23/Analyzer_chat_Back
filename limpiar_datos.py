@@ -66,7 +66,7 @@ def DataPoint(line):
 
 #----Funcion que convierte los datos en un DataFrame y los muestra 
 # 🔹 Función para procesar el contenido del chat
-def DataFrame_Data(content, nombre_archivo,user_token):
+def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     parsedData = []
     messageBuffer = []
     Date, Time, Format, Author = None, None, None, None
@@ -79,7 +79,7 @@ def DataFrame_Data(content, nombre_archivo,user_token):
         if Date_Chat(line):
             if Date and Author and messageBuffer:
                 message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
-                parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, user_token])
+                parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, archivo_chat_id])
 
             messageBuffer.clear()
 
@@ -94,7 +94,7 @@ def DataFrame_Data(content, nombre_archivo,user_token):
         print(f"Autor detectado: {repr(Author)}")
         parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text])
 
-    df = pd.DataFrame(parsedData, columns=['NombreArchivo', 'Date', 'Time', 'Format', 'Author', 'Message', 'user_token'])
+    df = pd.DataFrame(parsedData, columns=['NombreArchivo', 'Date', 'Time', 'Format', 'Author', 'Message', 'archivo_chat_id'])
     
 
     if df.empty:
@@ -144,10 +144,8 @@ def DataFrame_Data(content, nombre_archivo,user_token):
     df['Year'] = df['Date'].dt.year
     df['Date'] = df['Date'].dt.strftime('%d/%m/%Y')
     df['Formato'] = df['Format']  # Guardar el AM/PM
-    df['user_token'] = user_token  # Agregar user_token
+    df['archivo_chat_id'] = archivo_chat_id  
     
-    df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message','user_token']]
+    df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message', 'archivo_chat_id']]
     
-    print (df['user_token'])
-
     return df
