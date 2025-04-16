@@ -5,7 +5,9 @@ import unicodedata
 import regex as re  # 🔥 Necesitas usar `regex` en vez de `re`
 #-----Funcion que detecta la fecha y hora de los mensajes
 def Date_Chat(l):
-    pattern = r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\. m\. -'
+    if len(l) > 5000:
+        return False
+    pattern = r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\.\s?m\.\s-\s'
     return re.match(pattern, l) is not None
 #---Funcion que detecta el autor de los mensajes
 def IsAuthor(l):
@@ -149,3 +151,4 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message', 'archivo_chat_id']]
     
     return df
+    

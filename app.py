@@ -254,8 +254,6 @@ def upload():
         conn.close()
 
 ##YA ESTA
-
-
 @app.route("/get_statistics", methods=["GET"])
 def get_statistics():
     archivo_chat_id = request.args.get("archivo_chat_id")
