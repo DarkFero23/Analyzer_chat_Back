@@ -1387,6 +1387,8 @@ def grafico_emociones():
 palabras_toxicas = {
     "idiota",
     "estúpido",
+        "estúpida",
+
     "imbécil",
     "tonto",
     "odiar",
@@ -1441,7 +1443,10 @@ palabras_toxicas = {
     "mongol",
     "mongolo",
     "mongólica",
+    "mongolica",
+    "mongolico",
     "cagón",
+    "cagon",
     "cagona",
     "csm",
     "ctmre",
@@ -1780,7 +1785,108 @@ def buscar_palabra():
         ),
         200,
     )
+@app.route("/contar_palabra", methods=["GET"])
+def contar_palabra():
+    palabra = request.args.get("palabra")
+    archivo_chat_id = request.args.get("archivo_chat_id")
+
+    if not palabra or not archivo_chat_id:
+        return jsonify({"error": "Faltan parámetros requeridos"}), 400
+
+    try:
+        archivo_chat_id = int(archivo_chat_id)
+    except ValueError:
+        return jsonify({"error": "El archivo_chat_id debe ser un número válido"}), 400
+
+    # ✅ Usar tu misma función que ya consulta la base
+    df = obtener_datos(archivo_chat_id)
+
+    if df is None or df.empty:
+        return jsonify({"error": "No se encontraron mensajes"}), 404
+
+    # 🔍 Contar palabra por autor
+    palabra = palabra.lower()
+    contador_por_autor = {}
+
+    for _, row in df.iterrows():
+        autor = row.get("autor")
+        mensaje = row.get("mensaje")
+
+        if not autor or not isinstance(mensaje, str):
+            continue
+
+        try:
+            count = len(re.findall(rf'\b{re.escape(palabra)}\b', mensaje, flags=re.IGNORECASE))
+            if count > 0:
+                contador_por_autor[autor] = contador_por_autor.get(autor, 0) + count
+        except Exception as e:
+            print(f"❌ Error al contar palabra en mensaje: {repr(mensaje)} - {e}")
+            continue
+
+    return jsonify({
+        "palabra": palabra,
+        "conteo_por_autor": contador_por_autor
+    })
+
+@app.route("/autor_que_reanuda_mas", methods=["GET"])
+def autor_que_reanuda_mas():
+    archivo_chat_id = request.args.get("archivo_chat_id")
+
+    if not archivo_chat_id:
+        return jsonify({"error": "Falta el archivo_chat_id"}), 400
+
+    try:
+        archivo_chat_id = int(archivo_chat_id)
+    except ValueError:
+        return jsonify({"error": "archivo_chat_id debe ser un número"}), 400
+
+    df = obtener_datos(archivo_chat_id)
+
+    if df is None or df.empty:
+        return jsonify({"error": "No se encontraron mensajes"}), 404
+
+    # Convertir a datetime
+    df["datetime"] = pd.to_datetime(df["fecha"] + " " + df["hora"], errors="coerce", dayfirst=True)
+    df = df.sort_values("datetime").dropna(subset=["datetime"])
+
+    # Detectar tiempo muerto (4+ horas)
+    df["delta_horas"] = df["datetime"].diff().dt.total_seconds().div(3600)
+    df["es_tiempo_muerto"] = df["delta_horas"] > 4
+    df.loc[df.index[0], "es_tiempo_muerto"] = True  # Primer mensaje cuenta
+
+    df_reanudos = df[df["es_tiempo_muerto"]].copy()
+
+    # Contar autores
+    conteo = df_reanudos["autor"].value_counts().to_dict()
+    autor_top = max(conteo, key=conteo.get)
+    autor_otro = next((a for a in conteo if a != autor_top), None)
+
+    # Asegurar compatibilidad JSON
+    autor_top = str(autor_top)
+    conteo_top = int(conteo[autor_top])
+    conteo_otro = int(conteo.get(autor_otro, 0)) if autor_otro else 0
+
+    # Formatear datetime para serializar
+    df_reanudos["datetime"] = df_reanudos["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    df_reanudos["longitud"] = df_reanudos["mensaje"].str.len()
+
+    # Top 5 mensajes largos por autor
+    top_mensajes = {}
+    for autor in [autor_top, autor_otro]:
+        if autor:
+            mensajes = df_reanudos[df_reanudos["autor"] == autor].sort_values("longitud", ascending=False)
+            top_mensajes[autor] = mensajes[["autor", "datetime", "mensaje"]].head(5).to_dict(orient="records")
+
+    return jsonify({
+        "autor_que_mas_reanuda": autor_top,
+        "veces_que_reanudo": conteo_top,
+        "autor_contraste": autor_otro,
+        "veces_que_reanudo_contraste": conteo_otro,
+        "top_5_mensajes_post_descanso": top_mensajes,
+        "criterio": "Reanudó conversación tras 4h de silencio"
+    })
+
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, emerson='almira')

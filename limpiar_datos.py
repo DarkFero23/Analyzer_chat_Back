@@ -3,6 +3,14 @@ import pandas as pd
 import os
 import unicodedata
 import regex as re  # 🔥 Necesitas usar `regex` en vez de `re`
+
+def detectar_plataforma(lineas):
+    for linea in lineas:
+        if re.match(r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\.\s?m\.\s-\s', linea):
+            return "android"
+        if re.match(r'^\[\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}:\d{2}\s[ap]\.\s?m\.\]', linea):
+            return "iphone"
+    return "desconocido"
 #-----Funcion que detecta la fecha y hora de los mensajes
 def Date_Chat(l):
     if len(l) > 5000:
@@ -70,6 +78,9 @@ def DataPoint(line):
 # 🔹 Función para procesar el contenido del chat
 def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     parsedData = []
+    lineas = content.split("\n")
+    plataforma = detectar_plataforma(lineas)
+    print(f"📱 Plataforma detectada: {plataforma}")
     messageBuffer = []
     Date, Time, Format, Author = None, None, None, None
 
@@ -78,18 +89,19 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
         if not line:
             continue
 
-        if Date_Chat(line):
-            if Date and Author and messageBuffer:
-                message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
-                parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, archivo_chat_id])
 
-            messageBuffer.clear()
+        if plataforma == "android":
+            if Date_Chat(line):
+                if Date and Author and messageBuffer:
+                    message_text = ' '.join(messageBuffer)
+                    parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, archivo_chat_id])
 
-            Date, Time, Format, Author, Message = DataPoint(line)
-            messageBuffer.append(Message if Message else "(Mensaje vacío)")
-
-        else:
-            messageBuffer.append(line)
+                messageBuffer.clear()
+                Date, Time, Format, Author, Message = DataPoint(line)
+                messageBuffer.append(Message if Message else "(Mensaje vacío)")
+            else:
+                messageBuffer.append(line)
+                
 
     if Date and Author and messageBuffer:
         message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
@@ -138,7 +150,8 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     week = {6: 'Domingo', 0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes', 5: 'Sábado'}
     month = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Sept', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
-    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
+    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
+
     df['Day'] = df['Date'].dt.weekday.map(week)
     df['Num_Day'] = df['Date'].dt.day
     df['Num_Month'] = df['Date'].dt.month
