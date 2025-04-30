@@ -72,8 +72,6 @@ def DataPoint(line):
 
     return Date, Time, Format, Author, Message
 
-
-
 #----Funcion que convierte los datos en un DataFrame y los muestra 
 # 🔹 Función para procesar el contenido del chat
 def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
@@ -83,11 +81,17 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     print(f"📱 Plataforma detectada: {plataforma}")
     messageBuffer = []
     Date, Time, Format, Author = None, None, None, None
-
+     # 🔍 Nuevas métricas para depuración
+    total_lineas = 0
+    mensajes_procesados = 0
+    autores_contados = {}
+    mensajes_set = set()
+    mensajes_duplicados = 0
     for line in content.split("\n"):
         line = line.strip()
         if not line:
             continue
+        total_lineas += 1  # contar líneas reales
 
 
         if plataforma == "android":
@@ -95,14 +99,82 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
                 if Date and Author and messageBuffer:
                     message_text = ' '.join(messageBuffer)
                     parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, archivo_chat_id])
+                    mensajes_procesados += 1
+                    if Author:
+                        autores_contados[Author] = autores_contados.get(Author, 0) + 1
 
+                    clave_mensaje = (Date, Time, Author, message_text)
+                    if clave_mensaje in mensajes_set:
+                        mensajes_duplicados += 1
+                    else:
+                        mensajes_set.add(clave_mensaje)
+                        messageBuffer.clear()
                 messageBuffer.clear()
                 Date, Time, Format, Author, Message = DataPoint(line)
                 messageBuffer.append(Message if Message else "(Mensaje vacío)")
             else:
                 messageBuffer.append(line)
-                
 
+        elif plataforma == "iphone":
+            # 🔹 Limpieza de línea para evitar errores por caracteres invisibles
+            line_clean = unicodedata.normalize("NFKC", line).replace('\u200e', '').strip()
+
+            if re.match(r'^\[\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}:\d{2}\s[ap]\.\s?m\.\]', line_clean):
+                if Date and Author and messageBuffer:
+                    message_text = ' '.join(messageBuffer)
+                    parsedData.append([nombre_archivo, Date, Time, Format, Author, message_text, archivo_chat_id])
+                    mensajes_procesados += 1
+                    if Author:
+                        autores_contados[Author] = autores_contados.get(Author, 0) + 1
+
+                    clave_mensaje = (Date, Time, Author, message_text)
+                    if clave_mensaje in mensajes_set:
+                        mensajes_duplicados += 1
+                    else:
+                        mensajes_set.add(clave_mensaje)
+                        messageBuffer.clear()
+
+                try:
+                    fecha_hora, mensaje = line_clean.split('] ', 1)
+                    fecha_hora = fecha_hora.strip('[]')
+
+                    partes = fecha_hora.split(',')
+                    if len(partes) >= 2:
+                        Date = partes[0].strip()
+                        hora_completa = partes[1].strip()
+
+                        match_hora = re.match(r'(\d{1,2}:\d{2}:\d{2})\s?([ap]\.\s?m\.)', hora_completa)
+                        if match_hora:
+                            Time = match_hora.group(1)
+                            Format = match_hora.group(2).lower().strip()
+                        else:
+                            print(f"⚠️ No se pudo extraer hora y formato en: {hora_completa}")
+                            Time = ""
+                            Format = "Desconocido"
+                    else:
+                        Date = "FECHA_INVÁLIDA"
+                        Time = ""
+                        Format = "Desconocido"
+
+                    Date = unicodedata.normalize("NFKC", Date)
+                    Time = unicodedata.normalize("NFKC", Time)
+                    Format = unicodedata.normalize("NFKC", Format)
+
+                    if ": " in mensaje:
+                        Author, Message = mensaje.split(": ", 1)
+                    else:
+                        print("❌ Línea sin autor detectado:")
+                        print(f">> {line_clean}")
+                        Author = "Desconocido"
+                        Message = mensaje
+
+                    messageBuffer.append(Message if Message else "(Mensaje vacío)")
+
+                except Exception as e:
+                    print(f"❌ Error al procesar línea iPhone: {line}\n{e}")
+            else:
+                messageBuffer.append(line)
+ 
     if Date and Author and messageBuffer:
         message_text = ' '.join(messageBuffer) if messageBuffer else "(Mensaje vacío)"
         print(f"Autor detectado: {repr(Author)}")
@@ -131,7 +203,6 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     df = df.drop(df[df['Author'].isnull()].index)
 
     # 🔹 Unir Time con Format
-   # Asegurar que Format no se pierda
     # 🔍 Verificar si 'Format' está en el DataFrame antes de trabajar con ella
     if 'Format' not in df.columns:
         print("❌ ERROR: La columna 'Format' no existe en el DataFrame. Verifica el procesamiento anterior.")
@@ -150,7 +221,8 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     week = {6: 'Domingo', 0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes', 5: 'Sábado'}
     month = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Sept', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
+    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+
 
     df['Day'] = df['Date'].dt.weekday.map(week)
     df['Num_Day'] = df['Date'].dt.day
@@ -162,6 +234,13 @@ def DataFrame_Data(content, nombre_archivo, archivo_chat_id):
     df['archivo_chat_id'] = archivo_chat_id  
     
     df = df[['NombreArchivo', 'Date', 'Day', 'Num_Day', 'Month', 'Num_Month', 'Year', 'Time', 'Format', 'Author', 'Message', 'archivo_chat_id']]
-    
+    # 🔎 Mostrar métricas de depuración
+    print("📊 Depuración de mensajes:")
+    print(f"🧾 Líneas totales en el archivo: {total_lineas}")
+    print(f"✅ Mensajes procesados: {mensajes_procesados}")
+    print(f"👥 Mensajes por autor:")
+    for autor, cant in autores_contados.items():
+        print(f"   - {autor}: {cant}")
+    print(f"🔁 Mensajes duplicados detectados: {mensajes_duplicados}")
     return df
     

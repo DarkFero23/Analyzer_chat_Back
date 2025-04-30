@@ -272,15 +272,27 @@ def get_statistics():
 
     # 🔥 Cálculo de estadísticas generales
     total_message = df.shape[0]
-    media_message = df[df["mensaje"] == "<Multimedia omitido>"].shape[0]
-    del_message = df[df["mensaje"] == "Eliminaste este mensaje."].shape[0]
+    multimedia_keywords = [
+    "<multimedia omitido>", "multimedia omitido", "imagen omitida", "audio omitida",
+    "video omitida", "sticker omitida", "gif omitida", "documento omitida"
+    ]    
+    es_multimedia = df["mensaje"].isin(multimedia_keywords)
+    media_message = es_multimedia.sum()
+    eliminado_keywords = [
+    "eliminaste este mensaje.",
+    "se eliminó este mensaje.",
+    "Eliminaste este mensaje.",
+    "Se eliminó este mensaje.",
+]
+    es_eliminado = df["mensaje"].str.lower().isin(eliminado_keywords)
     total_characters = df["mensaje"].apply(len).sum()
 
     media_percentage = (
         (media_message / total_message * 100) if total_message > 0 else 0.0
     )
-    del_percentage = (del_message / total_message * 100) if total_message > 0 else 0.0
+    del_message = es_eliminado.sum()
     avg_characters = (total_characters / total_message) if total_message > 0 else 0.0
+    del_percentage = (del_message / total_message * 100) if total_message > 0 else 0.0
 
     url_pattern = r"https?://\S+|www\.\S+"
     df["URL_count"] = df["mensaje"].apply(lambda x: len(re.findall(url_pattern, x)))
@@ -292,13 +304,13 @@ def get_statistics():
         .agg(
             total_mensajes=("mensaje", "count"),
             mensajes_multimedia=(
-                "mensaje",
-                lambda x: (x == "<Multimedia omitido>").sum(),
-            ),
+    "mensaje",
+    lambda x: x.str.lower().isin(multimedia_keywords).sum(),
+),
             mensajes_eliminados=(
-                "mensaje",
-                lambda x: (x == "Eliminaste este mensaje.").sum(),
-            ),
+    "mensaje",
+    lambda x: x.str.lower().isin(eliminado_keywords).sum(),
+),
             total_caracteres=("mensaje", lambda x: x.apply(len).sum()),
             total_links=("URL_count", "sum"),
         )
@@ -1889,4 +1901,4 @@ def autor_que_reanuda_mas():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, emerson='almira')
+    app.run(host="0.0.0.0", port=5000, debug=True)
