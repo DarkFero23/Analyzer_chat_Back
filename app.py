@@ -276,7 +276,7 @@ def get_statistics():
     "<multimedia omitido>", "multimedia omitido", "imagen omitida", "audio omitida",
     "video omitida", "sticker omitida", "gif omitida", "documento omitida"
     ]    
-    es_multimedia = df["mensaje"].isin(multimedia_keywords)
+    es_multimedia = df["mensaje"].str.lower().isin([k.lower() for k in multimedia_keywords])
     media_message = es_multimedia.sum()
     eliminado_keywords = [
     "eliminaste este mensaje.",

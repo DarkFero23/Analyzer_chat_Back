@@ -2,21 +2,28 @@ import re
 import pandas as pd
 import os
 import unicodedata
-import regex as re  # 🔥 Necesitas usar `regex` en vez de `re`
-
+import regex as re  
 def detectar_plataforma(lineas):
     for linea in lineas:
         if re.match(r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\.\s?m\.\s-\s', linea):
             return "android"
         if re.match(r'^\[\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}:\d{2}\s[ap]\.\s?m\.\]', linea):
             return "iphone"
+        if re.match(r'^\d{1,2}/\d{1,2}/\d{2}\s\d{1,2}:\d{2}\s?[ap]\.\s?m\.\s-\s', linea):
+            return "android"
     return "desconocido"
 #-----Funcion que detecta la fecha y hora de los mensajes
 def Date_Chat(l):
     if len(l) > 5000:
         return False
-    pattern = r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s[ap]\.\s?m\.\s-\s'
-    return re.match(pattern, l) is not None
+    l = unicodedata.normalize("NFKC", l).replace('\u202f', ' ').replace('\u200e', '').strip()
+
+    patrones = [
+        r'^\[\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}:\d{2}\s?[ap]\.\s?m\.\]',  # iPhone
+        r'^\d{1,2}/\d{1,2}/\d{4},\s\d{1,2}:\d{2}\s?[ap]\.\s?m\.\s-\s',         # Android antiguo
+        r'^\d{1,2}/\d{1,2}/\d{2}\s\d{1,2}:\d{2}\s?[ap]\.\s?m\.\s-\s'           # Android moderno sin coma
+    ]
+    return any(re.match(pat, l) for pat in patrones)
 #---Funcion que detecta el autor de los mensajes
 def IsAuthor(l):
     pattern = r"^([\w\s\p{P}\p{S}~]+):"  # Permite letras, espacios, puntuaciones, símbolos y "~"
