@@ -82,7 +82,9 @@ load_dotenv()
 app = Flask(__name__)
 
 #CORS PRODUCCION
-CORS(app, origins=["https://analyzer-chat.onrender.com"], supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+#CORS(app, origins=["https://analyzer-chat.onrender.com"], supports_credentials=True)
 #CORS(app, supports_credentials=True)
 
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
