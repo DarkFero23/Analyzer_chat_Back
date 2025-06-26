@@ -81,7 +81,7 @@ load_dotenv()
 # 🔹 Inicializar Flask
 app = Flask(__name__)
 
-CORS(app, supports_credentials=True)
+CORS(app, origins=["https://analyzer-chat.onrender.com"], supports_credentials=True)
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
 
 #####CONEXION A LA BD########
