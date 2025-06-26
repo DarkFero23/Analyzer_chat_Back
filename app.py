@@ -81,7 +81,10 @@ load_dotenv()
 # 🔹 Inicializar Flask
 app = Flask(__name__)
 
+#CORS PRODUCCION
 CORS(app, origins=["https://analyzer-chat.onrender.com"], supports_credentials=True)
+#CORS(app, supports_credentials=True)
+
 archivos_por_usuario = {}  # Diccionario para almacenar archivos temporalmente
 
 #####CONEXION A LA BD########
@@ -1274,6 +1277,21 @@ def top_palabras_usuario():
         "tampoco",
         "ahora",
         "mientras",
+        "omitido",
+        "multimedia",
+        "omitida",
+        "omitidos",
+        "omitidas",
+        "sticker",
+        "imagen",
+        "none",
+        "null",
+        "if",
+        "none"    
+        "return",
+        "time",
+        "este",
+        "mensaje"
     }
 
     # Diccionario para almacenar el top de palabras por usuario
