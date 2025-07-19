@@ -1293,7 +1293,19 @@ def top_palabras_usuario():
         "return",
         "time",
         "este",
-        "mensaje"
+        "mensaje",
+        "v",
+        "eso",
+        "esos",
+        "esas",
+        "esa"  ,
+        "esta",
+        "estos",
+        "estas",
+        "este",
+        "p",
+        "del",
+        "mas"
     }
 
     # Diccionario para almacenar el top de palabras por usuario
