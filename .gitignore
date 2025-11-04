@@ -1,0 +1,43 @@
+# 🧹 Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 🐍 Entornos virtuales
+venv/
+.env/
+.env.bak/
+.venv/
+env/
+ENV/
+
+# 🧾 Archivos de configuración de IDE
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# 🧪 Archivos de prueba y temporales
+*.log
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+
+# 📦 Archivos de dependencias
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 🧰 Configuración de coverage / testing
+.coverage
+.tox/
+.pytest_cache/
+htmlcov/
+
+# ⚙️ Archivos generados por herramientas
+*.spec
+*.lock
+pip-wheel-metadata/
